@@ -14,6 +14,10 @@ os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"  # where to downlo
 from jwst.pipeline import calwebb_detector1  # import detector processor, uncal-->rates
 from jwst.pipeline import calwebb_image2  # import image processor, rates-->cal
 
+NIRCAM_PARAM_DIR = "/media/ralphy/Ext_3n/NIRCAM"
+DEFAULT_STAGE1_PARAMS = os.path.join("stage1_params.asdf")
+DEFAULT_STAGE2_PARAMS = os.path.join("stage2_params.asdf")
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--RA', type=float, nargs="?",
                     help='Central right ascension of catalogue (deg)', default=110.8375)
@@ -21,38 +25,69 @@ parser.add_argument('--DEC', type=float, nargs="?", help="Central declination of
 parser.add_argument('--RAD', type=float, nargs="?", help="Search radius (deg)", default=1.0)
 parser.add_argument('--VISITID', type=str, help="VISIT ID (e.g., 2736 for SMACS)", default = None)
 parser.add_argument("--redo",type=bool,help="Should we redo the calibration even if files exist?",default=False)
-parser.add_argument("--max_cores", help="How many cores. Must be written as e.g., 'half', 'quarter' or 'all'", default="half")
+parser.add_argument(
+    "--max_cores",
+    help="Override the stage 1 ASDF maximum_cores values, e.g. 'half', 'quarter' or 'all'.",
+    default=None
+)
+parser.add_argument(
+    "--stage1_params",
+    help="Detector1Pipeline ASDF parameter file.",
+    default=DEFAULT_STAGE1_PARAMS
+)
+parser.add_argument(
+    "--stage2_params",
+    help="Image2Pipeline ASDF parameter file.",
+    default=DEFAULT_STAGE2_PARAMS
+)
 args = parser.parse_args()
+
+def pipeline_from_asdf(pipeline_class, params_file):
+    """Create a JWST pipeline from an ASDF parameter file."""
+    params_file = os.path.abspath(params_file)
+    if not os.path.isfile(params_file):
+        raise FileNotFoundError(f"Pipeline parameter file does not exist: {params_file}")
+    return pipeline_class.from_config_file(params_file)
+
+def set_output_dir(pipeline, output_dir):
+    """Route pipeline and step products to this file's output directory."""
+    pipeline.output_dir = output_dir
+    for step_name in getattr(pipeline, "step_defs", {}):
+        step = getattr(pipeline, step_name, None)
+        if step is not None and hasattr(step, "output_dir"):
+            step.output_dir = output_dir
+
+def override_max_cores(detector1, max_cores):
+    """Optionally override the stage 1 ASDF parallelism settings."""
+    if max_cores is None:
+        return
+    detector1.jump.maximum_cores = max_cores
+    detector1.ramp_fit.maximum_cores = max_cores
 
 def run1(input_data, rate_dir, cal_dir, files_bad_dir):
     """ Process every uncal to cal """
-
-    # detector1.clean_flicker_noise.fit_method = 'fft'
-    # detector1.jump.rejection_threshold = 4.0
-    # detector1.jump.expand_large_events = True
-    # detector1.sat_required_snowball = False
-    # detector1.max_jump_to_flag_neighbors = 1
-    # detector1.min_jump_to_flag_neighbors = 100000
 
     ## Make the cal and rates directories
     os.makedirs(rate_dir, exist_ok=True)
     os.makedirs(cal_dir, exist_ok=True)
 
     files = input_data
-    detector1 = calwebb_detector1.Detector1Pipeline()
 
-    ## EDIT THE CODE WITH THE JWST CALIBRATION OPTIONS HERE 
-    detector1.output_dir = rate_dir
-    detector1.jump.maximum_cores = args.max_cores
-    detector1.ramp_fit.maximum_cores = args.max_cores
-    # detector1.emicorr.skip = False ## Do the EMI banding correction for MIRI 
+    detector1 = pipeline_from_asdf(
+        calwebb_detector1.Detector1Pipeline,
+        args.stage1_params
+    )
+    set_output_dir(detector1, rate_dir)
+    override_max_cores(detector1, args.max_cores)
+
+    image2 = pipeline_from_asdf(
+        calwebb_image2.Image2Pipeline,
+        args.stage2_params
+    )
+    set_output_dir(image2, cal_dir)
 
     try:
         run_output = detector1.run(files)
-        image2 = calwebb_image2.Image2Pipeline()
-        image2.output_dir = cal_dir
-        image2.save_results = True
-        image2.resample.skip = True  # we don't need to resample the cals, since they get drizzled later
         image2.run(run_output)
     except Exception as e:
         ## in case the uncal mucks up
