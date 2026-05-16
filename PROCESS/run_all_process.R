@@ -61,6 +61,17 @@ main = function(){
   cores_pro = as.integer(env_var['JUMPROPE_cores_pro'])
   cores_stack = as.integer(env_var['JUMPROPE_cores_stack'])
   tasks_stack = as.integer(env_var['JUMPROPE_tasks_stack'])
+  cores_wisp_env = Sys.getenv('JUMPROPE_cores_wisp')
+  cores_wisp = if(nzchar(cores_wisp_env)){
+    suppressWarnings(as.integer(cores_wisp_env))
+  }else if("cores_wisp" %in% names(additional_params)){
+    suppressWarnings(as.integer(additional_params$cores_wisp))
+  }else{
+    8
+  }
+  if(is.na(cores_wisp) || cores_wisp < 1){
+    cores_wisp = 1
+  }
   
   dir_raw = env_var['JUMPROPE_RAW_DIR']
   
@@ -87,6 +98,8 @@ main = function(){
   patch_dir = paste0(ref_dir, "/Patch_Stacks/")
   
   raw_files = load_raw_files(dir_raw = dir_raw)
+  message("Using raw directory: ", dir_raw)
+  message("Found ", length(raw_files), " detector-level *_cal.fits input file(s).")
   
   VID_list = ifelse(
     VID == "",
@@ -101,6 +114,7 @@ main = function(){
       additional_params = additional_params,
       
       ref_dir = ref_dir,
+      raw_dir = dir_raw,
       
       Pro1oF_dir = Pro1oF_dir,
       cal_sky_dir = cal_sky_dir,
@@ -125,10 +139,11 @@ main = function(){
       do_MIRI = do_MIRI,
       
       cores_pro = cores_pro,
+      cores_wisp = cores_wisp,
       cores_stack = cores_stack,
       tasks_stack = tasks_stack,
   
-      SIGMA_LO = NULL #keep blurring at wisp rem stage off by default
+      SIGMA_LO = if("wisp_sigma_lo" %in% names(additional_params)) additional_params$wisp_sigma_lo else 20
     )
    
     if(length(args) <= 1){

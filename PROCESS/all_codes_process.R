@@ -4,22 +4,40 @@ load_files = function(input_args, which_module, sky_info = NULL){
   ## Load the correct files for what ever task
   ## Correctly place files into whatever module
   ## Which module tells me which step to load files for
-  
+
+  sanitise_fits_files = function(files){
+    files = as.character(files)
+    files = files[!is.na(files) & nzchar(files)]
+    files = files[grepl("[.]fits$", files)]
+    files = files[file.exists(files)]
+    unique(files)
+  }
+  match_visit_id = function(visit_values, vid){
+    if(is.null(vid) || identical(vid, "")){
+      return(rep(TRUE, length(visit_values)))
+    }
+    visit_values = sub("^0+", "", as.character(visit_values))
+    vid = sub("^0+", "", as.character(vid))
+    startsWith(visit_values, vid)
+  }
+
   VID = input_args$VID
   FILT = input_args$FILT
-  
+
   Pro1oF_dir = input_args$Pro1oF_dir
   sky_pro_dir = input_args$sky_pro_dir
   sky_frames_dir = input_args$sky_frames_dir
   sky_super_dir = input_args$sky_super_dir
   cal_sky_dir = input_args$cal_sky_dir
-  
+
   do_NIRISS = input_args$do_NIRISS
   do_MIRI = input_args$do_MIRI
   
   if(which_module == "1oF"){
     files_1oF = input_args$filelist
     files_1oF = files_1oF[grepl(VID, files_1oF) & grepl(".fits$", files_1oF)]
+    files_1oF = files_1oF[grepl("_cal[.]fits$", basename(files_1oF))]
+    files_1oF = sanitise_fits_files(files_1oF)
     if(do_NIRISS){
       files_1oF = files_1oF[!grepl('_mirimage_',files_1oF) & grepl('_nis_',files_1oF) & grepl(".fits$", files_1oF)]
     }else if (do_MIRI){
@@ -27,12 +45,14 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }else{
       files_1oF = files_1oF[!grepl('_mirimage_',files_1oF) & !grepl('_nis_', files_1oF) & grepl(".fits$", files_1oF)]
     }
-    
-    scan_1oF = Rfits_key_scan(filelist = files_1oF, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
-    
+    files_1oF = sanitise_fits_files(files_1oF)
+    if(length(files_1oF) == 0){
+      return(files_1oF)
+    }
+
+    scan_1oF = Rfits_key_scan(filelist = files_1oF, keylist = c("FILTER", "PROGRAM", "VISIT_ID"), cores = 1)
+    pid_idx = match_visit_id(scan_1oF$VISIT_ID, VID)
+
     files_1oF = files_1oF[pid_idx]
     files_1oF = files_1oF[grepl(FILT, scan_1oF$FILTER[pid_idx])]
     return(files_1oF)
@@ -51,11 +71,13 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }else{
       files_cal = files_cal[!grepl('_mirimage_',files_cal) & !grepl('_nis_', files_cal) & grepl(".fits$", files_cal)]
     }
+    files_cal = sanitise_fits_files(files_cal)
+    if(length(files_cal) == 0){
+      return(files_cal)
+    }
     
     scan_cal = Rfits_key_scan(filelist = files_cal, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal$VISIT_ID %in% corr_pid
+    pid_idx = match_visit_id(scan_cal$VISIT_ID, VID)
     
     files_cal = files_cal[pid_idx]
     files_cal = files_cal[grepl(FILT, scan_cal$FILTER[pid_idx])]
@@ -76,11 +98,13 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }else{
       files_sky = files_sky[!grepl('_mirimage_',files_sky) & !grepl('_nis_', files_sky) & grepl(".fits$", files_sky)]
     }
+    files_sky = sanitise_fits_files(files_sky)
+    if(length(files_sky) == 0){
+      return(files_sky)
+    }
     
     scan_sky = Rfits_key_scan(filelist = files_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_sky$VISIT_ID %in% corr_pid
+    pid_idx = match_visit_id(scan_sky$VISIT_ID, VID)
     
     files_sky = files_sky[pid_idx]
     files_sky = files_sky[grepl(FILT, scan_sky$FILTER[pid_idx])]
@@ -89,9 +113,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
   
   if(which_module == "apply_super"){
     
-    corr_pid = grep(VID, sky_info$visit_id, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = paste0(sky_info$visit_id) %in% corr_pid
+    pid_idx = match_visit_id(sky_info$visit_id, VID)
     
     sky_info = sky_info[grepl(VID, sky_info$fileim) & pid_idx & grepl(FILT, sky_info$filter), ]
     
@@ -117,11 +139,13 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }else{
       files_cal_sky = files_cal_sky[!grepl('_mirimage_',files_cal_sky) & !grepl('_nis_', files_cal_sky) & grepl(".fits$", files_cal_sky)]
     }
+    files_cal_sky = sanitise_fits_files(files_cal_sky)
+    if(length(files_cal_sky) == 0){
+      return(files_cal_sky)
+    }
     
     scan_cal_sky = Rfits_key_scan(filelist = files_cal_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal_sky$VISIT_ID %in% corr_pid
+    pid_idx = match_visit_id(scan_cal_sky$VISIT_ID, VID)
     
     files_cal_sky = files_cal_sky[pid_idx]
     files_cal_sky = files_cal_sky[grepl(FILT, scan_cal_sky$FILTER[pid_idx])]
@@ -131,11 +155,14 @@ load_files = function(input_args, which_module, sky_info = NULL){
   if(which_module == "wisp_rem"){
     files_wisp = input_args$filelist
     files_wisp = files_wisp[grepl(VID, files_wisp) & grepl(".fits$", files_wisp)]
+    files_wisp = files_wisp[grepl("_cal[.]fits$", basename(files_wisp))]
+    files_wisp = sanitise_fits_files(files_wisp)
+    if(length(files_wisp) == 0){
+      return(files_wisp)
+    }
     
-    scan_1oF = Rfits_key_scan(filelist = files_wisp,keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID]
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
+    scan_1oF = Rfits_key_scan(filelist = files_wisp,keylist = c("FILTER", "PROGRAM", "VISIT_ID"), cores = 1)
+    pid_idx = match_visit_id(scan_1oF$VISIT_ID, VID)
     
     files_wisp = files_wisp[pid_idx]
     return(files_wisp)
@@ -175,18 +202,25 @@ do_1of = function(input_args){
   cat("...")
   cat('Processing',length(filelist),'files\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+  if(length(filelist) == 0){
+    message("No detector-level *_cal.fits files matched this 1/f selection.")
+    return(invisible(NULL))
+  }
   
   lo_loop = 1
   hi_loop = length(filelist)
+  worker_count = max(1, min(cores, hi_loop))
+  cl = NULL
   
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
   }
 
-  dummy = foreach(i = lo_loop:hi_loop, .inorder = FALSE, .packages = c("Rfits", "Rwcs", "ProFound"))%dopar%{
+  tryCatch({
+    dummy = foreach(i = lo_loop:hi_loop, .inorder = FALSE, .packages = c("Rfits", "Rwcs", "ProFound"))%dopar%{
     if(i %% 100 == 0){
       message('File ',i,' of ', hi_loop)
     }
@@ -196,6 +230,15 @@ do_1of = function(input_args){
     
     if( !(skip_completed_files & file.exists(paste0(fullbase,'_Pro1oF.fits'))) ){
       temp_image = Rfits_read(filelist[i], pointer=FALSE)
+      if(is.null(temp_image$SCI) || is.null(temp_image$SCI$imDat) || !is.matrix(temp_image$SCI$imDat)){
+        stop("Invalid 1/f input file: ", file_image, " does not contain a 2D SCI image. Use detector-level *_cal.fits files, not *_i2d.fits mosaics.")
+      }
+      if(is.null(temp_image$DQ) || is.null(temp_image$DQ$imDat) || !is.matrix(temp_image$DQ$imDat)){
+        stop("Invalid 1/f input file: ", file_image, " does not contain a 2D DQ image. Use detector-level *_cal.fits files, not *_i2d.fits mosaics.")
+      }
+      if(!identical(dim(temp_image$SCI$imDat), dim(temp_image$DQ$imDat))){
+        stop("Invalid 1/f input file: ", file_image, " has mismatched SCI and DQ dimensions.")
+      }
   
       if(do_MIRI){
         keep_trend = FALSE
@@ -315,14 +358,14 @@ do_1of = function(input_args){
       return(NULL)
     }
   }
-  
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
+  }, finally = {
+    if(!is.null(parallel_type)){
+      try(stopCluster(cl), silent = TRUE)
+    }else{
+      try(stopImplicitCluster(), silent = TRUE)
+    }
     registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
-  }
+  })
   gc()
 }
 do_cal_process = function(input_args, filelist = NULL){
@@ -350,11 +393,16 @@ do_cal_process = function(input_args, filelist = NULL){
   cat("...")
   cat('Processing',length(filelist),'files...\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+  if(length(filelist) == 0){
+    message("No Pro1oF FITS files matched this sky-statistics selection.")
+    return(invisible(NULL))
+  }
+  worker_count = max(1, min(cores, length(filelist)))
   
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
   }
   
@@ -609,16 +657,36 @@ do_regen_sky_info = function(input_args){
   sky_frames_dir = input_args$sky_frames_dir
   
   cores = input_args$cores_pro
+  parallel_type = input_args$additional_params$parallel_type
   
-  registerDoParallel(cores=cores)
-  
-  # sky_frames_dir = paste0(sky_pro_dir, "/sky_frames/")
+  # Do not start more workers than files, especially for PSOCK where startup is expensive.
   filelist = list.files(sky_frames_dir, full.names = TRUE, pattern = glob2rx(paste0("*", input_args$VID, "*.fits")))
   filelist = grep('.fits$', filelist, value=TRUE)
+  worker_count = max(1, min(cores, length(filelist)))
 
+  if(is.null(parallel_type)){
+    registerDoParallel(cores=worker_count)
+    on.exit({
+      stopImplicitCluster()
+      registerDoSEQ()
+    }, add = TRUE)
+  }else{
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
+    registerDoParallel(cl)
+    on.exit({
+      try(stopCluster(cl), silent = TRUE)
+      registerDoSEQ()
+    }, add = TRUE)
+  }
+
+  # sky_frames_dir = paste0(sky_pro_dir, "/sky_frames/")
   cat('Processing',length(filelist),'files\n')
+  if(length(filelist) == 0){
+    message("No sky-frame FITS files matched this regen-sky-info selection.")
+    return(invisible(NULL))
+  }
   
-  sky_info = foreach(i = 1:length(filelist), .combine="rbind")%dopar%{
+  sky_info = foreach(i = seq_along(filelist), .combine="rbind", .packages = c("Rfits"))%dopar%{
     temp_info = Rfits_read_header(filelist[i])$keyvalues
     temp_info[1:4] = NULL
     temp_info$EXTNAME = NULL
@@ -649,12 +717,20 @@ do_super_sky = function(input_args){
   good_pix_cut = 0.15
   
   filelist = load_files(input_args, which_module = "super_sky")
+  if(length(filelist) == 0){
+    message("No sky-frame FITS files matched this super-sky selection.")
+    return(invisible(NULL))
+  }
   sky_info = fread(paste0(sky_pro_dir, '/sky_info.csv'))
   
   ## improved logic for file matching - have to match for VID/FILT
   normalised_paths = normalizePath(paste0(sky_info$pathsky, "/", sky_info$filesky), winslash = "/", mustWork = FALSE)
   normalised_filelist = normalizePath(filelist, winslash = "/", mustWork = FALSE)
   sky_info = sky_info[file.exists(paste0(sky_info$pathsky, "/", sky_info$filesky)) & (normalised_paths %in% normalised_filelist), ]
+  if(dim(sky_info)[1] == 0){
+    message("No sky-info rows matched existing sky-frame files for this super-sky selection.")
+    return(invisible(NULL))
+  }
 
   niriss_det = c("NIS")
   miri_det = c("MIRIMAGE")
@@ -671,19 +747,34 @@ do_super_sky = function(input_args){
   combine_grid_nis = expand.grid(niriss_det, nis_filt, stringsAsFactors=FALSE)
   combine_grid_miri = expand.grid(miri_det, miri_filt, stringsAsFactors=FALSE)
   combine_grid = rbind(combine_grid_short, combine_grid_long, combine_grid_nis, combine_grid_miri)
+  if(dim(combine_grid)[1] == 0){
+    message("No detector/filter combinations matched this super-sky selection.")
+    return(invisible(NULL))
+  }
   
   sky_filelist = list.files(sky_info[1,pathsky], pattern = ".fits$")
   
   sky_info = data.frame(sky_info)
   
+  # Do not start more workers than detector/filter combinations.
+  worker_count = max(1, min(cores, dim(combine_grid)[1]))
+
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
+    on.exit({
+      stopImplicitCluster()
+      registerDoSEQ()
+    }, add = TRUE)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
+    on.exit({
+      try(stopCluster(cl), silent = TRUE)
+      registerDoSEQ()
+    }, add = TRUE)
   }  
   
-  dummy = foreach(i = 1:dim(combine_grid)[1], .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound"))%dopar%{
+  dummy = foreach(i = seq_len(dim(combine_grid)[1]), .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound", "ProPane", "imager"))%dopar%{
     if(combine_grid[i,1] %in% c('NRCA1','NRCA2','NRCA3','NRCA4','NRCB1','NRCB2','NRCB3','NRCB4')){
       temp_info = sky_info[sky_info$detector == combine_grid[i,1] & sky_info$filter == combine_grid[i,2] & sky_info$skychi < sky_ChiSq_cut & sky_info$goodpix >= good_pix_cut, ]
     }else if (combine_grid[i,1] %in% c('MIRIMAGE')){
@@ -705,7 +796,7 @@ do_super_sky = function(input_args){
           return(sky_temp)
         }
       })
-      sky_mean = propaneStackFlatFunc(sky_frames_list, imager_func = function(xx){imager::average(xx, na.rm = TRUE)}, cores =1)$image 
+      sky_mean = ProPane::propaneStackFlatFunc(sky_frames_list, imager_func = function(xx){imager::average(xx, na.rm = TRUE)}, cores =1)$image
     }else{
       message("No usable data for ", combine_grid[i,1]," ",combine_grid[i,2])
       temp_file = sky_info[sky_info$detector == combine_grid[i,1] & sky_info$filter == combine_grid[i,2],'fileim'][1]
@@ -734,13 +825,6 @@ do_super_sky = function(input_args){
     }
   }
   
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
-    registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
-  }
   gc()
 }
 do_apply_super_sky = function(input_args){
@@ -779,18 +863,23 @@ do_apply_super_sky = function(input_args){
   
   cat('Processing',length(sky_filelist),'files...\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+  if(length(sky_filelist) == 0){
+    message("No sky-info rows matched this apply-super-sky selection.")
+    return(invisible(NULL))
+  }
   
   lo_loop = 1
   hi_loop = length(sky_filelist)
+  worker_count = max(1, min(cores, hi_loop))
   
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
   }  
   
-  dummy = foreach(i = lo_loop:hi_loop, .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound"))%dopar%{
+  dummy = foreach(i = lo_loop:hi_loop, .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound", "magicaxis"))%dopar%{
     if(i %% 100 == 0){
       message('File ',i,' of ', hi_loop)
     }
@@ -861,7 +950,7 @@ do_apply_super_sky = function(input_args){
       BR = median(temp_cal_sky[imdim[1]-corner_pix,corner_pix], na.rm=TRUE)
       
       #centre
-      CC = median( magcutout(temp_cal_sky, box = c(100, 100))$image, na.rm=TRUE)
+      CC = median( magicaxis::magcutout(temp_cal_sky, box = c(100, 100))$image, na.rm=TRUE)
       
       pedestals = c(BL, LHS, TL, THS, TR, RHS, BR, BHS, CC)
       
@@ -935,6 +1024,10 @@ do_modify_pedestal = function(input_args){
   
   cat('Processing',length(filelist),'files...\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+  if(length(filelist) == 0){
+    message("No cal_sky FITS files matched this pedestal-modification selection.")
+    return(invisible(NULL))
+  }
   
   cal_sky_info_ext1 = Rfits_key_scan(filelist = filelist,
                                      keylist = c('VISIT_ID', 'OBS_ID', 'EXPOSURE', 'DETECTOR', 'MODULE', 'CHANNEL', 'FILTER'),
@@ -959,11 +1052,12 @@ do_modify_pedestal = function(input_args){
   
   lo_loop = 1
   hi_loop = dim(cal_sky_info)[1]
+  worker_count = max(1, min(cores, hi_loop))
   
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
   } 
   
@@ -1092,6 +1186,14 @@ do_cal_sky_info = function(input_args){
   cal_sky_renorm_dir = input_args$cal_sky_renorm_dir
   cal_sky_info_save_dir = input_args$cal_sky_info_save_dir
   cores = input_args$cores_pro
+
+  if(cores > 1){
+    registerDoParallel(cores = cores)
+    on.exit({
+      stopImplicitCluster()
+      registerDoSEQ()
+    }, add = TRUE)
+  }
   
   cal_sky_info_WCS = Rfits_key_scan(dirlist=cal_sky_renorm_dir,
                                     keylist = c('PHOTMJSR','PIXAR_SR','CRVAL1', 'CRVAL2', 'CD1_1', 'CD1_2', 'CD2_1', 'CD2_2'),
@@ -1113,12 +1215,19 @@ do_cal_sky_info = function(input_args){
   
   cal_sky_info$MAGZERO_FIX = 0.0
   ## get most recent pmap
-  most_recent_pmap_ctx = max(unique(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", s)))
+  pmap_ctx_ids = suppressWarnings(as.integer(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", cal_sky_info$CRDS_CTX)))
+  pmap_ctx_ids = pmap_ctx_ids[!is.na(pmap_ctx_ids)]
+  most_recent_pmap_ctx = if(length(pmap_ctx_ids) > 0){
+    paste0('jwst_', max(pmap_ctx_ids), '.pmap')
+  }else{
+    NA_character_
+  }
   
   for(i in 1:dim(cal_sky_info)[1]){
     #below is then Eqn [1] below
-    ## Tie to pmap 1179 for now
-    temp_MAGZERO_FIX = cal_sky_info[i,MAGZERO] -2.5*log10(as.numeric(pmap[CRDS_CTX==paste0('jwst_', most_recent_pmap_ctx, '.pmap') & DETECTOR==cal_sky_info[i,'DETECTOR'] & FILTER==cal_sky_info[i,'FILTER'],PHOTMJSR]) / cal_sky_info[i,PHOTMJSR])
+    ## Tie to the most recent pmap represented in this processing run.
+    temp_PHOTMJSR = pmap[CRDS_CTX==most_recent_pmap_ctx & DETECTOR==cal_sky_info[i,DETECTOR] & FILTER==cal_sky_info[i,FILTER],PHOTMJSR]
+    temp_MAGZERO_FIX = cal_sky_info[i,MAGZERO] -2.5*log10(as.numeric(temp_PHOTMJSR) / cal_sky_info[i,PHOTMJSR])
     if(length(temp_MAGZERO_FIX) == 1){
       cal_sky_info[i,MAGZERO_FIX := temp_MAGZERO_FIX] 
     }else{
@@ -1185,14 +1294,19 @@ do_gen_stack = function(input_args){
   
   temp_vid = VID
   VID_list = grep(paste0("^",temp_vid), unique_visits, value = T)
+  if(length(VID_list) == 0){
+    message("No visits matched VID selection: ", temp_vid)
+    return(invisible(NULL))
+  }
 
-  for(VID in VID_list){
+  selected_visits = VID_list
+  visit_idx = paste0(orig_cal_sky_info$VISIT_ID) %in% paste0(selected_visits)
     if(do_NIRISS){
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & grepl("NIS", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[visit_idx & grepl("NIS", orig_cal_sky_info$DETECTOR),]
     }else if(do_MIRI){
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & grepl("MIRIMAGE", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[visit_idx & grepl("MIRIMAGE", orig_cal_sky_info$DETECTOR),]
     }else{
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & !grepl("NIS|MIRIMAGE", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[visit_idx & !grepl("NIS|MIRIMAGE", orig_cal_sky_info$DETECTOR),]
     }
     cal_sky_info$MAGZERO_FIX[is.na(cal_sky_info$MAGZERO_FIX)] = cal_sky_info$MAGZERO[is.na(cal_sky_info$MAGZERO_FIX)]
     
@@ -1200,7 +1314,7 @@ do_gen_stack = function(input_args){
     stack_grid = stack_grid[grepl(FILT, stack_grid$FILTER), ]
     
     if(dim(stack_grid)[1] == 0){
-      next ## If the FILTER/VID combo is null then skip 
+      return(invisible(NULL)) ## If the FILTER/VID combo is null then skip
     }else{
       print(stack_grid)
     }
@@ -1258,24 +1372,108 @@ do_gen_stack = function(input_args){
     
     stack_grid = data.frame(stack_grid)
     cal_sky_info = data.frame(cal_sky_info)
+    if("DATE-OBS" %in% names(cal_sky_info)){
+      names(cal_sky_info)[names(cal_sky_info) == "DATE-OBS"] = "DATE.OBS"
+    }
     
     list_residual_temp_files = list.files(invar_dir, pattern = "temp_list_.+", full.names = T)
     if(length(list_residual_temp_files)>0){
-      unlink(list_residual_temp_files, recursive = T)
+      message("Leaving ", length(list_residual_temp_files), " existing temp stack list file(s) in place.")
     }
     
-    if(is.null(parallel_type)){
-      registerDoParallel(cores = tasks)
+    stack_tasks_requested = suppressWarnings(as.integer(tasks))
+    if(is.na(stack_tasks_requested) || stack_tasks_requested < 1){
+      stack_tasks_requested = 1
+    }
+    stack_cores_requested = suppressWarnings(as.integer(cores))
+    if(is.na(stack_cores_requested) || stack_cores_requested < 1){
+      stack_cores_requested = 1
+    }
+    max_stack_tasks_requested = input_args$additional_params$max_stack_tasks
+    if(is.null(max_stack_tasks_requested)){
+      max_stack_tasks_requested = 8
+    }
+    max_stack_tasks = suppressWarnings(as.integer(max_stack_tasks_requested))
+    if(is.na(max_stack_tasks) || max_stack_tasks < 1){
+      max_stack_tasks = 8
+    }
+    detected_cores = parallel::detectCores(logical = TRUE)
+    psock_stack_requested = !is.null(parallel_type) && toupper(parallel_type) %in% c("PSOCK", "SOCK")
+
+    if(stack_tasks_requested > 1){
+      stack_tasks = max(1, min(stack_tasks_requested, max_stack_tasks, hi_loop))
+      if(!is.na(detected_cores)){
+        stack_tasks = min(stack_tasks, detected_cores)
+      }
+      stack_cores_effective = 1
+      stack_parallel_mode = "outer"
+      stack_multitype = "none"
+      if(stack_tasks_requested > stack_tasks){
+        message(
+          "Capping stacking to ", stack_tasks, " concurrent task(s). Requested tasks_stack=",
+          stack_tasks_requested, "; max_stack_tasks=", max_stack_tasks,
+          "; available stack rows=", hi_loop, "."
+        )
+      }
+      if(stack_cores_requested > 1){
+        message(
+          "Ignoring cores_stack=", stack_cores_requested,
+          " while tasks_stack > 1. ProPane uses a global foreach backend internally; ",
+          "nested stacking workers can deadlock or stall."
+        )
+      }
+      message(
+        "Stack parallelization: ",
+        stack_tasks, " concurrent stack task(s) x sequential ProPane internals."
+      )
+      if(psock_stack_requested){
+        message(
+          "Ignoring parallel_type=", parallel_type,
+          " for stacking outer tasks. ProPane/Rwcs use global foreach state internally; ",
+          "PSOCK outer workers can keep triggering nested task export errors."
+        )
+      }
     }else{
-      cl <- makeCluster(spec = tasks, type = parallel_type, outfile = "")
-      registerDoParallel(cl)
+      stack_tasks = 1
+      if(psock_stack_requested){
+        stack_cores_effective = 1
+        stack_parallel_mode = "serial"
+        stack_multitype = "none"
+        if(stack_cores_requested > 1){
+          message(
+            "Forcing ProPane cores to 1 under PSOCK. ProPane's internal stacking ",
+            "parallelism uses foreach/fork semantics and is not reliable inside PSOCK runs."
+          )
+        }
+      }else{
+        stack_cores_effective = stack_cores_requested
+        if(!is.na(detected_cores)){
+          stack_cores_effective = min(stack_cores_effective, detected_cores)
+        }
+        stack_parallel_mode = "inner"
+        stack_multitype = if(stack_cores_effective > 1) "fork" else "none"
+      }
+      message(
+        "Stack parallelization: 1 stack task x up to ",
+        stack_cores_effective, " ProPane core(s) per task."
+      )
+    }
+
+    cl = NULL
+    if(stack_tasks > 1){
+      registerDoParallel(cores = stack_tasks)
+    }else{
+      registerDoSEQ()
     }
     
-   dummy = foreach(i = lo_loop:hi_loop, .packages = c('Rwcs', 'Rfits', 'ProPane', 'ProFound'))%dopar%{
+   tryCatch({
+   dummy = foreach(i = lo_loop:hi_loop, .packages = c('Rwcs', 'Rfits', 'ProPane', 'ProFound', 'foreach'))%dopar%{
+     foreach::registerDoSEQ()
      message('Stacking ', i,' of ',hi_loop)
       for(j in module_list){
         if( !(skip_completed_files & file.exists(paste0(invar_dir, '/stack_',stack_grid[i,'VISIT_ID'],'_',stack_grid[i,'FILTER'],'_',j,'.fits'))) ){
           message('  Processing ',stack_grid[i,'VISIT_ID'],' ',stack_grid[i,'FILTER'], ' ', j)
+          input_info = NULL
           
           if(j == 'MIRIMAGE'){
             input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('MIRIMAGE', cal_sky_info[['DETECTOR']]),]
@@ -1298,7 +1496,7 @@ do_gen_stack = function(input_args){
           }
           
           if(j == 'NRCA_short'){
-            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCA', cal_sky_info[['DETECTOR']]),]
+            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCA[1-4]', cal_sky_info[['DETECTOR']]),]
             CRVAL1 = module_A_WCS_short[module_A_WCS_short[['VISIT_ID']] == stack_grid[i,'VISIT_ID'], 'CRVAL1']
             CRVAL2 = module_A_WCS_short[module_A_WCS_short[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CRVAL2']
             CD1_1 = module_A_WCS_short[module_A_WCS_short[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CD1_1']
@@ -1308,7 +1506,7 @@ do_gen_stack = function(input_args){
           }
           
           if(j == 'NRCB_short'){
-            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCB', cal_sky_info[['DETECTOR']]),]
+            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCB[1-4]', cal_sky_info[['DETECTOR']]),]
             CRVAL1 = module_B_WCS_short[module_B_WCS_short[['VISIT_ID']] == stack_grid[i,'VISIT_ID'], 'CRVAL1']
             CRVAL2 = module_B_WCS_short[module_B_WCS_short[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CRVAL2']
             CD1_1 = module_B_WCS_short[module_B_WCS_short[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CD1_1']
@@ -1318,7 +1516,7 @@ do_gen_stack = function(input_args){
           }
           
           if(j == 'NRCA_long'){
-            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCA', cal_sky_info[['DETECTOR']]),]
+            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCALONG', cal_sky_info[['DETECTOR']]),]
             CRVAL1 = module_A_WCS_long[module_A_WCS_long[['VISIT_ID']] == stack_grid[i,'VISIT_ID'], 'CRVAL1']
             CRVAL2 = module_A_WCS_long[module_A_WCS_long[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CRVAL2']
             CD1_1 = module_A_WCS_long[module_A_WCS_long[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CD1_1']
@@ -1328,7 +1526,7 @@ do_gen_stack = function(input_args){
           }
           
           if(j == 'NRCB_long'){
-            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCB', cal_sky_info[['DETECTOR']]),]
+            input_info = cal_sky_info[cal_sky_info[['VISIT_ID']]==stack_grid[i,'VISIT_ID'] & cal_sky_info[['FILTER']]==stack_grid[i,'FILTER'] & grepl('NRCBLONG', cal_sky_info[['DETECTOR']]),]
             CRVAL1 = module_B_WCS_long[module_B_WCS_long[['VISIT_ID']] == stack_grid[i,'VISIT_ID'], 'CRVAL1']
             CRVAL2 = module_B_WCS_long[module_B_WCS_long[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CRVAL2']
             CD1_1 = module_B_WCS_long[module_B_WCS_long[['VISIT_ID']]  == stack_grid[i,'VISIT_ID'], 'CD1_1']
@@ -1336,11 +1534,23 @@ do_gen_stack = function(input_args){
             NAXIS = NAXIS_long
             CRPIX = NAXIS_long/2.0
           }
+
+          if(is.null(input_info) || dim(input_info)[1] == 0){
+            message('  Skipping ',stack_grid[i,'VISIT_ID'],' ',stack_grid[i,'FILTER'], ' ', j, ': no matching frames')
+            next
+          }
+          stack_cores = max(1, min(stack_cores_effective, dim(input_info)[1]))
+          stack_backend_label = if(stack_multitype == "none") "sequential" else stack_multitype
+          message(
+            '  Drizzling ', dim(input_info)[1], ' frame(s) with ',
+            stack_cores, ' ProPane core(s) using ', stack_backend_label,
+            ' backend; stack mode: ', stack_parallel_mode
+          )
           
           image_list = {}
           inVar_list = {}
           
-          for(k in 1:dim(input_info)[1]){
+          for(k in seq_len(dim(input_info)[1])){
             temp_image = Rfits_read_image(input_info[k,'full'], ext=2)
             
             temp_mask = Rfits_read_image(input_info[k,'full'], ext=4, header=FALSE)
@@ -1395,7 +1605,7 @@ do_gen_stack = function(input_args){
             inVar_list = c(inVar_list, Rfits::Rfits_read_key(sky_file, 'SKYRMS')^-2)
           }
           
-          temp_file = paste0(invar_dir, '/temp_list_',i,'.fits')
+          temp_file = paste0(invar_dir, '/temp_list_', Sys.getpid(), '_', i, '_', j, '.fits')
           Rfits_write(image_list, temp_file)
           rm(image_list)
           image_list_point = Rfits_read(temp_file, pointer=TRUE)
@@ -1423,6 +1633,9 @@ do_gen_stack = function(input_args){
           temp_proj$DATE_BEG = as.character(min(as.POSIXlt.Date(input_info[["DATE.OBS"]]), na.rm=TRUE))
           temp_proj$DATE_END = as.character(max(as.POSIXlt.Date(input_info[["DATE.OBS"]]), na.rm=TRUE))
           
+          if(stack_multitype == "none"){
+            foreach::registerDoSEQ()
+          }
           output_stack = propaneStackWarpInVar(
             image_list = image_list_point,
             inVar_list = inVar_list,
@@ -1430,7 +1643,7 @@ do_gen_stack = function(input_args){
             magzero_in = input_info$MAGZERO_FIX,
             magzero_out = magzero,
             keyvalues_out = temp_proj,
-            cores = cores, 
+            cores = stack_cores,
             direction = 'backward',
             doclip = doclip,
             clip_tol = clip_tol,
@@ -1439,8 +1652,9 @@ do_gen_stack = function(input_args){
             keep_extreme_pix = FALSE,
             dump_frames = TRUE,
             dump_dir = dump_stub,
-            multitype="cluster" ## Just keep this default since this parallelisation occurs in the ProPane package (and the underlying C libraries)
+            multitype = stack_multitype
           )
+          foreach::registerDoSEQ()
           
           output_stack$image$keyvalues$CLIP_MIN = clip_tol[1]
           output_stack$image$keyvalues$CLIP_MAX = clip_tol[2]
@@ -1471,11 +1685,15 @@ do_gen_stack = function(input_args){
           output_stack$image$keycomments = rep(list(''), length(unique(names(output_stack$image$keyvalues))))
           names(output_stack$image$keycomments) = output_stack$image$keynames
           
+          if(stack_multitype == "none"){
+            foreach::registerDoSEQ()
+          }
           median_stack = propaneStackWarpMed(dirlist = dump_stub,
-                                             pattern = glob2rx('*image_warp*'), 
-                                             keyvalues_out = output_stack$image$keyvalues, 
-                                             cores = cores,
-                                             multitype = "cluster")
+                                             pattern = glob2rx('*image_warp*'),
+                                             keyvalues_out = output_stack$image$keyvalues,
+                                             cores = stack_cores,
+                                             multitype = stack_multitype)
+          foreach::registerDoSEQ()
           
           file.remove(temp_file)
           
@@ -1492,18 +1710,16 @@ do_gen_stack = function(input_args){
           )
           gc()
         }
-      }
+     }
      return(NULL)
     }
-   if(!is.null(parallel_type)){
-     stopCluster(cl)
+   }, finally = {
+     if(stack_tasks > 1){
+       try(stopImplicitCluster(), silent = TRUE)
+     }
      registerDoSEQ()
-   }else{
-     stopImplicitCluster()
-     registerDoSEQ()
-   }
+   })
    gc()
-  }
 }
 do_wisp_rem = function(input_args){
   
@@ -1513,10 +1729,28 @@ do_wisp_rem = function(input_args){
 
   filelist = input_args$filelist
   VID = input_args$VID
+  raw_dir = input_args$raw_dir
   median_dir = input_args$median_dir
   cores = input_args$cores_pro
   additional_params  = input_args$additional_params
-  SIGMA_LO = input_args$SIGMA_LO
+  cores_wisp = if("cores_wisp" %in% names(input_args)){
+    input_args$cores_wisp
+  }else if("cores_wisp" %in% names(additional_params)){
+    additional_params$cores_wisp
+  }else{
+    8
+  }
+  cores_wisp = suppressWarnings(as.integer(cores_wisp))
+  if(is.na(cores_wisp) || cores_wisp < 1){
+    cores_wisp = 1
+  }
+  SIGMA_LO = if("SIGMA_LO" %in% names(input_args)) input_args$SIGMA_LO else 20
+  if(!is.null(SIGMA_LO)){
+    SIGMA_LO = suppressWarnings(as.numeric(SIGMA_LO))
+    if(length(SIGMA_LO) != 1 || is.na(SIGMA_LO) || SIGMA_LO <= 0){
+      SIGMA_LO = NULL
+    }
+  }
   
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = additional_params$parallel_type
@@ -1528,13 +1762,27 @@ do_wisp_rem = function(input_args){
   }
   
   filelist = load_files(input_args, which_module = "wisp_rem")
+  if(length(filelist) == 0){
+    message("No detector-level *_cal.fits files matched this wisp-removal selection for VID: ", VID)
+    if(!is.null(raw_dir)){
+      message("Raw directory used by this run: ", raw_dir)
+    }
+    filename_candidates = input_args$filelist[
+      !is.na(input_args$filelist) &
+        grepl(VID, input_args$filelist, fixed = TRUE) &
+        grepl("_cal[.]fits$", basename(input_args$filelist))
+    ]
+    message("Filename candidates before FITS-header filtering: ", length(filename_candidates))
+    return(invisible(NULL))
+  }
+  scan_cores = max(1, min(cores, length(filelist), 16))
   
   info = Rfits_key_scan(filelist = filelist,
-                        keylist=c('DETECTOR', 'MODULE', 'FILTER', 'VISIT_ID'), cores = cores)
+                        keylist=c('DETECTOR', 'MODULE', 'FILTER', 'VISIT_ID'), cores = scan_cores)
   
   
   wcs_info = Rfits_key_scan(filelist = filelist, extlist = 2,
-                            keylist = c("CRVAL1", "CRVAL2")) ## Find longest overlapping wisp frame
+                            keylist = c("CRVAL1", "CRVAL2"), cores = scan_cores) ## Find longest overlapping wisp frame
   info = bind_cols(info, wcs_info[,c("CRVAL1", "CRVAL2")])
   
   if(additional_params$do_claws){
@@ -1546,121 +1794,258 @@ do_wisp_rem = function(input_args){
   
   cat('Processing',dim(info_wisp)[1],'files\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+  if(dim(info_wisp)[1] == 0){
+    message("No short-wavelength NIRCam files matched the wisp-removal detector selection.")
+    return(invisible(NULL))
+  }
   
   idx_wisp_skip = !(unname(sapply( info_wisp$full, function(x){any(na.omit(Rfits_extnames(x)) == "SCI_ORIG")} )) & skip_completed_files)
   
-  ref_im_list = {}
-  for(ii in 1:dim(mod_visit_grid)[1]){
+  max_wisp_visit_refs = suppressWarnings(as.integer(additional_params$max_wisp_visit_refs))
+  if(is.na(max_wisp_visit_refs) || max_wisp_visit_refs < 1){
+    max_wisp_visit_refs = 4
+  }
+  max_wisp_spatial_refs = suppressWarnings(as.integer(additional_params$max_wisp_spatial_refs))
+  if(is.na(max_wisp_spatial_refs) || max_wisp_spatial_refs < 0){
+    max_wisp_spatial_refs = 0
+  }
+  max_wisp_refs_per_file = suppressWarnings(as.integer(additional_params$max_wisp_refs_per_file))
+  if(is.na(max_wisp_refs_per_file) || max_wisp_refs_per_file < 1){
+    max_wisp_refs_per_file = 2
+  }
+  max_wisp_refs_per_file = min(max_wisp_refs_per_file, max_wisp_visit_refs + max_wisp_spatial_refs)
+  wisp_ref_search_radius_arcsec = suppressWarnings(as.numeric(additional_params$wisp_ref_search_radius_arcsec))
+  if(is.na(wisp_ref_search_radius_arcsec) || wisp_ref_search_radius_arcsec <= 0){
+    wisp_ref_search_radius_arcsec = 120
+  }
+  normalise_ref_paths = function(files){
+    files = as.character(files)
+    files = files[!is.na(files) & nzchar(files)]
+    files = files[file.exists(files)]
+    files = normalizePath(files, winslash = "/", mustWork = FALSE)
+    files[!duplicated(files)]
+  }
+  keep_long_wisp_refs = function(files, module = NULL){
+    files = normalise_ref_paths(files)
+    files = files[grepl("NRC[AB]_long[.]fits$", basename(files))]
+    if(!is.null(module)){
+      module_files = files[grepl(paste0("NRC", module, "_long[.]fits$"), basename(files))]
+      if(length(module_files) > 0){
+        files = module_files
+      }
+    }
+    files[!duplicated(files)]
+  }
+  order_long_wisp_refs = function(files){
+    files = normalise_ref_paths(files)
+    filter_num = suppressWarnings(as.numeric(stringr::str_match(basename(files), "F([0-9]+)[WMN]")[,2]))
+    files[order(ifelse(is.finite(filter_num), filter_num, -Inf), decreasing = TRUE)]
+  }
+  angular_sep_arcsec = function(ra1, dec1, ra2, dec2){
+    dra = (ra2 - ra1) * cos(dec1 * pi / 180)
+    ddec = dec2 - dec1
+    sqrt(dra^2 + ddec^2) * 3600
+  }
+  all_long_ref_files = keep_long_wisp_refs(
+    list.files(median_dir, pattern = "NRC[AB]_long[.]fits$", full.names = TRUE)
+  )
+  if(length(all_long_ref_files) > 0){
+    long_ref_info = data.frame(
+      Rfits_key_scan(
+        filelist = all_long_ref_files,
+        keylist = c("CRVAL1", "CRVAL2"),
+        cores = 1
+      )
+    )
+    long_ref_info$full = normalise_ref_paths(long_ref_info$full)
+    long_ref_info$MODULE = stringr::str_match(basename(long_ref_info$full), "NRC([AB])_long[.]fits$")[,2]
+    long_ref_info$FILTER_NUM = suppressWarnings(as.numeric(stringr::str_match(basename(long_ref_info$full), "F([0-9]+)[WMN]")[,2]))
+    long_ref_info = long_ref_info[is.finite(long_ref_info$CRVAL1) & is.finite(long_ref_info$CRVAL2), ]
+  }else{
+    long_ref_info = data.frame()
+  }
+  message("Available long-wavelength median stack references: ", dim(long_ref_info)[1])
+
+  ref_im_list = vector("list", dim(mod_visit_grid)[1])
+  for(ii in seq_len(dim(mod_visit_grid)[1])){
     if(idx_wisp_skip[ii]){
-      ## Look for long channel in the same VID
-      ref_files = list.files(
+      ## Always prefer long-channel stacks from the same visit/module.
+      visit_ref_files = list.files(
         median_dir, 
         pattern = glob2rx(paste0(
-          "*", mod_visit_grid$VISIT_ID[ii], "*", mod_visit_grid$MODULE[ii], "*", "short", "*.fits"
+          "*", mod_visit_grid$VISIT_ID[ii], "*NRC", mod_visit_grid$MODULE[ii], "_long", "*.fits"
         )),
         full.names = T)
-      ref_files = ref_files[!grepl("F150W2|F070W|F090W|F115W|F150W|F200W|F140M|F162M|F182M|F210M|F164N|F187N|F212N", ref_files)] ## Remove the short wavelength filters
+      visit_ref_files = keep_long_wisp_refs(visit_ref_files, module = mod_visit_grid$MODULE[ii])
+      visit_ref_files = head(order_long_wisp_refs(visit_ref_files), max_wisp_visit_refs)
+
+      ## Spatial references are fallback-only: same-visit/module long stacks
+      ## are safer because wide-field WCS warps can fail for nearby but
+      ## differently distorted visits.
+      spatial_ref_files = character(0)
+      needed_spatial_refs = max(0, max_wisp_visit_refs - length(visit_ref_files))
+      needed_spatial_refs = min(max_wisp_spatial_refs, needed_spatial_refs)
+      if(dim(long_ref_info)[1] > 0 && needed_spatial_refs > 0){
+        spatial_info = long_ref_info[long_ref_info$MODULE == mod_visit_grid$MODULE[ii], ]
+        if(dim(spatial_info)[1] > 0){
+          spatial_info$SEP_ARCSEC = angular_sep_arcsec(
+            mod_visit_grid$CRVAL1[ii],
+            mod_visit_grid$CRVAL2[ii],
+            spatial_info$CRVAL1,
+            spatial_info$CRVAL2
+          )
+          spatial_info = spatial_info[
+            is.finite(spatial_info$SEP_ARCSEC) &
+              spatial_info$SEP_ARCSEC <= wisp_ref_search_radius_arcsec &
+              !(spatial_info$full %in% visit_ref_files),
+          ]
+          if(dim(spatial_info)[1] > 0){
+            spatial_info = spatial_info[
+              order(spatial_info$SEP_ARCSEC, -ifelse(is.finite(spatial_info$FILTER_NUM), spatial_info$FILTER_NUM, -Inf)),
+            ]
+            spatial_ref_files = head(spatial_info$full, needed_spatial_refs)
+          }
+        }
+      }
       
+      ref_files = head(order_long_wisp_refs(c(visit_ref_files, spatial_ref_files)), max_wisp_refs_per_file)
+      n_visit_ref_files = sum(ref_files %in% visit_ref_files)
+      n_spatial_ref_files = sum(ref_files %in% spatial_ref_files)
       if(length(ref_files) == 0){
-        ## If no long channel exists, then perform a spatial search and use any overlapping long channel for Wisp Rem
-        ref_files = propaneFrameFinder(
-          dirlist = median_dir, 
-          RAcen = mod_visit_grid$CRVAL1[ii],
-          Deccen = mod_visit_grid$CRVAL2[ii],
-          rad = 0.1/3600, ## match within 0.1 asec
-          plot = FALSE, 
-          cores = cores
-        )$full ## Now do a frame finder to try and find long channel NOT in VIISITID (but could be in PROGRAM)
-        ref_files = ref_files[grepl("short.+fits$", ref_files)]
-      }
-      
-      filter_long = c(
-        str_match(ref_files, "F\\s*(.*?)\\s*[WMN]")[,2]
-      )
-      
-      if(length(filter_long) == 0){
         message("No overlapping long wavelength for wisp correction")
-        load_ref = NULL
+        load_ref = character(0)
       }else{
-        message(paste("Loading reference for:", paste0(mod_visit_grid$VISIT_ID[ii]), mod_visit_grid$DETECTOR[ii], mod_visit_grid$stub[ii] ))
-        filter_long[is.na(filter_long)] = -1
-        long_num = max(filter_long, na.rm = T)
-        ref_file_long = ref_files[ which(grepl(long_num, ref_files))[1] ] #Get the longest filter
-        load_ref = list(Rfits_point(ref_file_long))
+        message(
+          paste(
+            "Loading", length(ref_files), "long-wavelength reference stack(s) for:",
+            paste0(mod_visit_grid$VISIT_ID[ii]),
+            mod_visit_grid$DETECTOR[ii],
+            mod_visit_grid$stub[ii],
+            paste0("(same-visit=", n_visit_ref_files, ", spatial=", n_spatial_ref_files, ")"),
+            paste(basename(ref_files), collapse = ", ")
+          )
+        )
+        names(ref_files) = basename(ref_files)
+        load_ref = ref_files
       }
-      ref_im_list = c(ref_im_list, load_ref) ## Allow loop in wisp rem to read long wavelength reference
+      ref_im_list[ii] = list(load_ref) ## Allow loop in wisp rem to read long wavelength reference
     }
   }
   
+  worker_count = max(1, min(cores_wisp, dim(info_wisp)[1]))
+  message(
+    "Using ", worker_count, " wisp-removal worker(s); up to ",
+    max_wisp_refs_per_file, " long-wavelength reference stack(s) per file."
+  )
+  cl = NULL
   if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
+    registerDoParallel(cores = worker_count)
   }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+    cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
     registerDoParallel(cl)
   }
   
-  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"))%dopar%{
-    if(idx_wisp_skip[ii]){
+  tryCatch({
+  temp = foreach(ii = seq_len(dim(info_wisp)[1]), .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound", "matrixStats"), .export = c("wispFixer"))%dopar%{
+    if(!idx_wisp_skip[ii]){
+      return(list(status = "skipped", file = info_wisp$full[ii], error = NA_character_))
+    }
+
+    tryCatch({
       ## copy original data to directory where we keep the wisps
       vid = paste0(info_wisp$VISIT_ID[ii])
       modl = paste0("NRC", info_wisp$MODULE[ii])
-      
-      ref_im = ref_im_list[[ii]] ## read in long wavelength reference 
-      if(is.null(ref_im)){
-        message("No long wavelength - skipping...")
-        return(NULL)
-      }else{
-        wisp_frame = Rfits_read_image(info_wisp$full[ii], ext = 2)
-        
-        check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
-        extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
-        
-        if(is.na(extloc)){ ## only make the SCI_ORIG if it doesn't already exist, otherwise we risk overwriting with something that isn't the original science frame!
-          Rfits_write_image(wisp_frame, filename=info_wisp$full[ii], create_file=FALSE)
-          Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='SCI_ORIG', keycomment='No wisp corr')
-        }
-        
-        if(any( (vid == additional_params$ID_vlarge$VISIT_ID & modl == additional_params$ID_vlarge$MODULE) | 
-                (vid == additional_params$ID_large$VISIT_ID & modl == additional_params$ID_large$MODULE)) ){
-          sigma_lo = NULL
-        }else{
-          sigma_lo = SIGMA_LO
-        }
-        poly = NULL    
-        
-        wisp_fix = wispFixer(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo)
-        Rfits_write_pix(data = wisp_fix$wisp_fix$imDat, filename = info_wisp$full[ii], ext = 2)
-        
-        check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
-        extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'REF_WISP_WARP')
-        if(is.na(extloc)){ 
-          Rfits_write_image(wisp_fix$ref_im_warp, filename=info_wisp$full[ii], create_file=FALSE)
-          Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='REF_WISP_WARP', keycomment='Reference long wavelength for wisp corr')
-        }else{
-          Rfits_write_pix(wisp_fix$ref_im_warp$imDat, filename = info_wisp$full[ii], ext = extloc)
-        }
-        
-        check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
-        extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'WISP_TEMPLATE')
-        if(is.na(extloc)){
-          Rfits_write_image(wisp_fix$wisp_template, filename=info_wisp$full[ii], create_file=FALSE)
-          Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='WISP_TEMPLATE', keycomment='Wisp template')
-        }else{
-          Rfits_write_pix(wisp_fix$wisp_template, filename = info_wisp$full[ii], ext = extloc)
-        }
-        return(NULL)
+
+      ref_files = ref_im_list[[ii]]
+      if(is.null(ref_files) || length(ref_files) == 0){
+        message("No long wavelength - skipping ", basename(info_wisp$full[ii]))
+        return(list(status = "no_ref", file = info_wisp$full[ii], error = NA_character_))
       }
-    }else{
-      return(NULL)
-    }
+
+      message(
+        "Wisp correcting ", ii, "/", dim(info_wisp)[1], ": ",
+        basename(info_wisp$full[ii]), " using ", length(ref_files), " reference stack(s)"
+      )
+      ref_im = ref_files ## wispFixer reads and reports each long-wavelength reference stack
+
+      check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
+      extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
+
+      if(all(is.na(extloc))){ ## only make the SCI_ORIG if it doesn't already exist, otherwise we risk overwriting with something that isn't the original science frame!
+        wisp_frame = Rfits_read_image(info_wisp$full[ii], ext = 2)
+        Rfits_write_image(wisp_frame, filename=info_wisp$full[ii], create_file=FALSE)
+        Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='SCI_ORIG', keycomment='No wisp corr')
+      }else{
+        wisp_frame = Rfits_read_image(info_wisp$full[ii], ext = extloc[!is.na(extloc)][1])
+      }
+
+      if(any( (vid == additional_params$ID_vlarge$VISIT_ID & modl == additional_params$ID_vlarge$MODULE) |
+              (vid == additional_params$ID_large$VISIT_ID & modl == additional_params$ID_large$MODULE)) ){
+        sigma_lo = NULL
+      }else{
+        sigma_lo = SIGMA_LO
+      }
+      poly = NULL
+
+      wisp_fix = wispFixer(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo)
+      Rfits_write_pix(data = wisp_fix$wisp_fix$imDat, filename = info_wisp$full[ii], ext = 2)
+
+      check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
+      extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'REF_WISP_WARP')
+      if(all(is.na(extloc))){
+        Rfits_write_image(wisp_fix$ref_im_warp, filename=info_wisp$full[ii], create_file=FALSE)
+        Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='REF_WISP_WARP', keycomment='Reference long wavelength for wisp corr')
+      }else{
+        Rfits_write_pix(wisp_fix$ref_im_warp$imDat, filename = info_wisp$full[ii], ext = extloc[!is.na(extloc)][1])
+      }
+
+      check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
+      extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'WISP_TEMPLATE')
+      if(all(is.na(extloc))){
+        Rfits_write_image(wisp_fix$wisp_template, filename=info_wisp$full[ii], create_file=FALSE)
+        Rfits_write_key(filename=info_wisp$full[ii], ext=check_Nhdu+1, keyname='EXTNAME', keyvalue='WISP_TEMPLATE', keycomment='Wisp template')
+      }else{
+        Rfits_write_pix(wisp_fix$wisp_template, filename = info_wisp$full[ii], ext = extloc[!is.na(extloc)][1])
+      }
+      list(status = "ok", file = info_wisp$full[ii], error = NA_character_)
+    }, error = function(err){
+      message("Wisp removal failed for ", basename(info_wisp$full[ii]), ": ", conditionMessage(err))
+      list(status = "error", file = info_wisp$full[ii], error = conditionMessage(err))
+    })
   }
-  
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
+  }, finally = {
+    if(!is.null(parallel_type)){
+      try(stopCluster(cl), silent = TRUE)
+    }else{
+      try(stopImplicitCluster(), silent = TRUE)
+    }
     registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
+  })
+  temp_status = vapply(temp, function(x){
+    if(inherits(x, "error")){
+      return("error")
+    }
+    if(is.list(x) && !is.null(x$status)){
+      return(x$status)
+    }
+    "unknown"
+  }, character(1))
+  message(
+    "Wisp removal summary: ",
+    sum(temp_status == "ok"), " corrected, ",
+    sum(temp_status == "skipped"), " skipped, ",
+    sum(temp_status == "no_ref"), " without references, ",
+    sum(temp_status %in% c("error", "unknown")), " failed."
+  )
+  if(any(temp_status %in% c("error", "unknown"))){
+    failed = temp[temp_status %in% c("error", "unknown")]
+    failed_msg = vapply(failed, function(x){
+      if(inherits(x, "error")){
+        return(conditionMessage(x))
+      }
+      paste0(basename(x$file), ": ", x$error)
+    }, character(1))
+    warning("Some wisp-removal files failed:\n", paste(head(failed_msg, 20), collapse = "\n"), call. = FALSE)
   }
   gc()
 }
@@ -1698,90 +2083,93 @@ do_patch = function(input_args){
     invar_files = invar_files[grepl(paste0("(?<![0-9])(", VID, ")"), invar_files, perl = TRUE) & grepl(FILT, invar_files) & !grepl("patch", invar_files)]
     median_files = median_files[grepl(paste0("(?<![0-9])(", VID, ")"), median_files, perl = TRUE) & grepl(FILT, median_files) & !grepl("patch", median_files)]
 
-    if(length(median_files)==0){
-      message("No frames") 
+    if(length(median_files)==0 || length(invar_files)==0){
+      message("No frames")
     }else{
+      worker_count = max(1, min(cores, length(invar_files)))
+      cl = NULL
       if(is.null(parallel_type)){
-        registerDoParallel(cores = cores)
+        registerDoParallel(cores = worker_count)
       }else{
-        cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
+        cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
         registerDoParallel(cl)
       }
-      
-      dummy = foreach(i = 1:length(invar_files))%dopar%{
-        
-        message(paste0("Patching: ", invar_files[i]))
-        info_load_invar = Rfits_read(invar_files[i], pointer=TRUE)
-        info_temp = info_load_invar$image
-        
-        fstub = str_remove( str_remove(string = info_temp$filename, pattern = dirname(info_temp$filename)), ".+stack" )
-        
-        if( !(skip_completed_files & file.exists(paste0(patch_stub, "patch", fstub))) ){
-          
-          load_invar = Rfits_read(invar_files[i], pointer=FALSE)
-          load_median = Rfits_read(median_files[i], pointer=FALSE)
-          temp = load_invar$image
-          
-          med_patch=propanePatch(image_inVar = temp, 
-                                 image_med = load_median$image)
-          
-          ## compute the bounding box
-          edge_mask = matrix(0L, nrow = dim(temp)[1], ncol = dim(temp)[2])
-          rough_mask = is.na(temp$imDat)
-          mask_label = as.matrix(imager::label(imager::as.cimg(rough_mask)))
-          tally_pixels = tabulate(mask_label)
-          sel = which(tally_pixels > 0)
-          mask_loc = which(matrix(mask_label %in% sel, dim(temp)[1], dim(temp)[2]), arr.ind=TRUE)
-          edge_mask[mask_loc] = 1
-          edge_mask = 1- edge_mask
-          
-          big_NA_mask = matrix(0L, nrow = dim(temp)[1], ncol = dim(temp)[2])
-          rough_mask = is.na(temp$imDat)
-          mask_label = as.matrix(imager::label(imager::as.cimg(rough_mask)))
-          tally_pixels = tabulate(mask_label)
-          sel = which(tally_pixels > 150 & tally_pixels < max(tally_pixels))
-          mask_loc = which(matrix(mask_label %in% sel, dim(temp)[1], dim(temp)[2]), arr.ind=TRUE)
-          big_NA_mask[mask_loc] = 1
-          # magimage(big_NA_mask)
-          
-          propane_mask_fix = propanePatchPix(
-            image = med_patch$image, 
-            mask = (edge_mask + big_NA_mask) == 1,
-          )
-          
-          patch_mask = temp - propane_mask_fix
-          
-          patch = list()
-          
-          patch$image = propane_mask_fix
-          patch$patch = patch_mask
-          patch$inVar = load_invar$inVar
-          patch$weight = load_invar$weight
-          
-          patch$image$keyvalues$EXTNAME = "image"
-          patch$patch$keyvalues$EXTNAME = "patch"
-          patch$inVar$keyvalues$EXTNAME = "inVar"
-          patch$weight$keyvalues$EXTNAME = "weight"
-          
-          class(patch) = "Rfits_list"
-          
-          Rfits_write_all(
-            data = patch, 
-            filename = paste0(patch_stub, "patch", fstub)
-          )
-          return(NULL)
-        }else{
-          return(NULL)
+
+      tryCatch({
+        dummy = foreach(i = seq_along(invar_files), .packages = c("Rfits", "ProPane", "stringr", "imager"))%dopar%{
+
+          message(paste0("Patching: ", invar_files[i]))
+          info_load_invar = Rfits_read(invar_files[i], pointer=TRUE)
+          info_temp = info_load_invar$image
+
+          fstub = str_remove( str_remove(string = info_temp$filename, pattern = dirname(info_temp$filename)), ".+stack" )
+
+          if( !(skip_completed_files & file.exists(paste0(patch_stub, "patch", fstub))) ){
+
+            load_invar = Rfits_read(invar_files[i], pointer=FALSE)
+            load_median = Rfits_read(median_files[i], pointer=FALSE)
+            temp = load_invar$image
+
+            med_patch=propanePatch(image_inVar = temp,
+                                   image_med = load_median$image)
+
+            ## compute the bounding box
+            edge_mask = matrix(0L, nrow = dim(temp)[1], ncol = dim(temp)[2])
+            rough_mask = is.na(temp$imDat)
+            mask_label = as.matrix(imager::label(imager::as.cimg(rough_mask)))
+            tally_pixels = tabulate(mask_label)
+            sel = which(tally_pixels > 0)
+            mask_loc = which(matrix(mask_label %in% sel, dim(temp)[1], dim(temp)[2]), arr.ind=TRUE)
+            edge_mask[mask_loc] = 1
+            edge_mask = 1- edge_mask
+
+            big_NA_mask = matrix(0L, nrow = dim(temp)[1], ncol = dim(temp)[2])
+            rough_mask = is.na(temp$imDat)
+            mask_label = as.matrix(imager::label(imager::as.cimg(rough_mask)))
+            tally_pixels = tabulate(mask_label)
+            sel = which(tally_pixels > 150 & tally_pixels < max(tally_pixels))
+            mask_loc = which(matrix(mask_label %in% sel, dim(temp)[1], dim(temp)[2]), arr.ind=TRUE)
+            big_NA_mask[mask_loc] = 1
+            # magimage(big_NA_mask)
+
+            propane_mask_fix = propanePatchPix(
+              image = med_patch$image,
+              mask = (edge_mask + big_NA_mask) == 1,
+            )
+
+            patch_mask = temp - propane_mask_fix
+
+            patch = list()
+
+            patch$image = propane_mask_fix
+            patch$patch = patch_mask
+            patch$inVar = load_invar$inVar
+            patch$weight = load_invar$weight
+
+            patch$image$keyvalues$EXTNAME = "image"
+            patch$patch$keyvalues$EXTNAME = "patch"
+            patch$inVar$keyvalues$EXTNAME = "inVar"
+            patch$weight$keyvalues$EXTNAME = "weight"
+
+            class(patch) = "Rfits_list"
+
+            Rfits_write_all(
+              data = patch,
+              filename = paste0(patch_stub, "patch", fstub)
+            )
+            return(NULL)
+          }else{
+            return(NULL)
+          }
         }
-      }
-      
-      if(!is.null(parallel_type)){
-        stopCluster(cl)
+      }, finally = {
+        if(!is.null(parallel_type)){
+          try(stopCluster(cl), silent = TRUE)
+        }else{
+          try(stopImplicitCluster(), silent = TRUE)
+        }
         registerDoSEQ()
-      }else{
-        stopImplicitCluster()
-        registerDoSEQ()
-      }
+      })
       gc()
     }
   }
@@ -1791,6 +2179,9 @@ do_RGB = function(input_args){
   cat("\n")
   message("## Making RGB image ##")
   cat("\n")
+
+  registerDoSEQ()
+  on.exit(registerDoSEQ(), add = TRUE)
 
   VID = input_args$VID
   ref_dir = input_args$ref_dir
@@ -1810,6 +2201,7 @@ do_RGB = function(input_args){
   unique_visits = grep(vid_temp, unique(cal_sky_info$VISIT_ID), value = T)
   
   for(VID in unique_visits){
+    registerDoSEQ()
     
     if(is.null(RGB_dir)){
       RGB_dir = paste0(ref_dir, "/RGB/", VID, "/")
@@ -1825,7 +2217,8 @@ do_RGB = function(input_args){
                            full.names = T)
     
     frame_info = Rfits_key_scan(filelist = file_list,
-                                keylist = c("CRVAL1", "CRVAL2", "CD1_1", "CD1_2", "NAXIS1", "NAXIS2"))
+                                keylist = c("CRVAL1", "CRVAL2", "CD1_1", "CD1_2", "NAXIS1", "NAXIS2"),
+                                cores = 1)
     # temp_proj = Rwcs_keypass(CRVAL1 = mean(frame_info$CRVAL1),
     #                          CRVAL2 = mean(frame_info$CRVAL2),
     #                          CD1_1 = min(frame_info$CD1_1),
@@ -1856,7 +2249,7 @@ do_RGB = function(input_args){
     green_files = file_list[grepl(green_filters, file_list)]
     red_files = file_list[grepl(red_filters, file_list)]
     
-    if(length(red_files>0)){
+    if(length(red_files) > 0){
       red_images = lapply(red_files, function(x){Rfits_read(x)$image[,]})
     }else{
       red_images = list(Rfits_create_image(matrix(0L, 
@@ -1864,7 +2257,7 @@ do_RGB = function(input_args){
                                                   ncol = temp_proj$NAXIS2), 
                                            keyvalues = temp_proj))
     }
-    if(length(green_files>0)){
+    if(length(green_files) > 0){
       green_images = lapply(green_files, function(x){Rfits_read(x)$image[,]})
     }else{
       green_images = list(Rfits_create_image(matrix(0L, 
@@ -1872,7 +2265,7 @@ do_RGB = function(input_args){
                                                     ncol = temp_proj$NAXIS2), 
                                              keyvalues = temp_proj))
     }
-    if(length(blue_files>0)){
+    if(length(blue_files) > 0){
       blue_images = lapply(blue_files, function(x){Rfits_read(x)$image[,]})
     }else{
       blue_images = list(Rfits_create_image(matrix(0L, 
@@ -1884,6 +2277,7 @@ do_RGB = function(input_args){
     R_stack = propaneStackWarpInVar(red_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
     G_stack = propaneStackWarpInVar(green_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
     B_stack = propaneStackWarpInVar(blue_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
+    registerDoSEQ()
     
     temp = R_stack$image
     edge_mask = matrix(1L, nrow = dim(temp)[1], ncol = dim(temp)[2])
@@ -1901,22 +2295,45 @@ do_RGB = function(input_args){
     Rfits_write_image(R_patch, paste0(RGB_dir, "/", VID, "_R.fits"))
     Rfits_write_image(G_patch, paste0(RGB_dir, "/", VID, "_G.fits"))
     Rfits_write_image(B_patch, paste0(RGB_dir, "/", VID, "_B.fits"))
+
+    map_rgb_channel = function(channel, locut, hicut){
+      channel_data = channel$imDat
+      if(!any(is.finite(channel_data) & channel_data > 0)){
+        channel$imDat[] = 0
+      }else{
+        channel$imDat = magicaxis::magmap(
+          data = channel_data,
+          locut = locut,
+          hicut = hicut,
+          type = 'quan',
+          stretch = 'log',
+          range = c(0, 1),
+          bad = 0
+        )$map
+        channel$imDat[!is.finite(channel$imDat)] = 0
+      }
+      channel
+    }
+    R_display = map_rgb_channel(R_patch, locut, hicut)
+    G_display = map_rgb_channel(G_patch, locut, hicut)
+    B_display = map_rgb_channel(B_patch, locut, hicut)
     
     im_width = 12 #inches
     im_height = im_width * (temp_proj$NAXIS2 / temp_proj$NAXIS1)
     
     filestub = paste0(patch_dir, '/RGB_patch_image_',VID, "_all", "_clear.png")
-    png(filename = filestub, width=im_width, height=im_height, 
-             units='in', res=400, quality=100)
+    png(filename = filestub, width=im_width, height=im_height,
+             units='in', res=400)
     par(mar=c(0,0,0,0), oma=rep(0,4))
     Rwcs_imageRGB(
-      R = R_patch,
-      G = G_patch,
-      B = B_patch,
+      R = R_display,
+      G = G_display,
+      B = B_display,
       locut=locut,
       hicut=hicut,
       type='quan',
       stretch = 'log',
+      magmap = FALSE,
       sparse=1,
       decorate=F
     )
@@ -1966,30 +2383,35 @@ do_wisp_reverse = function(input_args){
   )
   message("...")
   
-  if(is.null(parallel_type)){
-    registerDoParallel(cores = cores)
-  }else{
-    cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
-    registerDoParallel(cl)
-  }
-  
-  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop")%dopar%{
-    ## copy original data to directory where we keep the wisps
-    vid = paste0(info_wisp$VID[ii])
-    modl = paste0("NRC", info_wisp$MODULE[ii])
-    wisp_frame = Rfits_read(info_wisp$full[ii])
-    if(!is.null(wisp_frame$SCI_ORIG)){
-      Rfits_write_pix(data = wisp_frame$SCI_ORIG[,]$imDat, filename = info_wisp$full[ii], ext = 2) 
+  if(dim(info_wisp)[1] > 0){
+    worker_count = max(1, min(cores, dim(info_wisp)[1]))
+    cl = NULL
+    if(is.null(parallel_type)){
+      registerDoParallel(cores = worker_count)
+    }else{
+      cl <- makeCluster(spec = worker_count, type = parallel_type, outfile = "")
+      registerDoParallel(cl)
     }
-    return(NULL)
-  }
-  
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
-    registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
+
+    tryCatch({
+      temp = foreach(ii = seq_len(dim(info_wisp)[1]), .errorhandling = "stop", .packages = c("Rfits"))%dopar%{
+        ## copy original data to directory where we keep the wisps
+        vid = paste0(info_wisp$VID[ii])
+        modl = paste0("NRC", info_wisp$MODULE[ii])
+        wisp_frame = Rfits_read(info_wisp$full[ii])
+        if(!is.null(wisp_frame$SCI_ORIG)){
+          Rfits_write_pix(data = wisp_frame$SCI_ORIG[,]$imDat, filename = info_wisp$full[ii], ext = 2)
+        }
+        return(NULL)
+      }
+    }, finally = {
+      if(!is.null(parallel_type)){
+        try(stopCluster(cl), silent = TRUE)
+      }else{
+        try(stopImplicitCluster(), silent = TRUE)
+      }
+      registerDoSEQ()
+    })
   }
   gc()
 }
@@ -2004,24 +2426,95 @@ wispFixer = function(wisp_im, ref_im,
                      poly=NULL,
                      cores=1){
   
-  ref_im$imdat[is.infinite(ref_im$imdat)] = NA #remove infinities
+  ref_list = if(is.character(ref_im)){
+    as.list(ref_im)
+  }else if(is.list(ref_im) && is.null(ref_im$imdat) && is.null(ref_im$imDat)){
+    ref_im
+  }else{
+    list(ref_im)
+  }
+  ref_labels = names(ref_list)
+  if(is.null(ref_labels) || length(ref_labels) != length(ref_list)){
+    ref_labels = rep("", length(ref_list))
+  }
+  ref_labels[!nzchar(ref_labels)] = vapply(seq_along(ref_list), function(ref_index){
+    ref_single = ref_list[[ref_index]]
+    if(is.character(ref_single)){
+      basename(ref_single[1])
+    }else if(!is.null(ref_single$filename)){
+      basename(ref_single$filename)
+    }else{
+      paste0("#", ref_index)
+    }
+  }, character(1))
+  
+  warp_wisp_ref = function(ref_single, ref_index, ref_label){
+    tryCatch({
+      if(is.character(ref_single)){
+        ref_single = Rfits::Rfits_point(ref_single)
+      }
+      if(!is.null(ref_single$imdat)){
+        ref_single$imdat[is.infinite(ref_single$imdat)] = NA
+      }
+      if(!is.null(ref_single$imDat)){
+        ref_single$imDat[is.infinite(ref_single$imDat)] = NA
+      }
+
+      ref_im_warp_untweak = propaneWarp(ref_single, keyvalues_out=wisp_im$keyvalues, cores=cores, direction = "forward")
+      propaneTweakImage(
+        image_ref = wisp_im[,], image_pre_fix = ref_im_warp_untweak[,],
+        delta_max = c(2, 0.1), quan_cut = c(0.995, 0.9999),
+        shift_int = F, quick = T, verbose = F, cores = 1
+      )$image_post_fix
+    }, error = function(err){
+      message("Skipping unusable long-wavelength wisp reference ", ref_label, " (#", ref_index, "): ", conditionMessage(err))
+      NULL
+    })
+  }
+  
   wisp_im$imDat[is.infinite(wisp_im$imDat)] = NA
-  
-  #Step 1
-  ref_im_warp_untweak = propaneWarp(ref_im, keyvalues_out=wisp_im$keyvalues, cores=cores, direction = "forward")
-  
-  ## 1i Align ref to wisp_im using propaneTweak
-  ## Use only 1 core in case resources run out
-  ref_im_warp = propaneTweakImage(
-    image_ref = wisp_im[,], image_pre_fix = ref_im_warp_untweak[,], 
-    delta_max = c(2, 0.1), quan_cut = c(0.995, 0.9999),
-    shift_int = F, quick = T, verbose = F, cores = 1 
-  )$image_post_fix
+
+  warped_refs = lapply(seq_along(ref_list), function(ref_index){
+    warp_wisp_ref(ref_list[[ref_index]], ref_index, ref_labels[ref_index])
+  })
+  warped_refs = Filter(Negate(is.null), warped_refs)
+  if(length(warped_refs) == 0){
+    stop("No usable long-wavelength wisp references could be warped to the short-channel frame.")
+  }
+  if(length(warped_refs) == 1){
+    ref_im_warp = warped_refs[[1]]
+  }else{
+    ref_dims = lapply(warped_refs, function(x){dim(x$imDat)})
+    keep_dim = vapply(ref_dims, function(x){identical(x, ref_dims[[1]])}, logical(1))
+    if(!all(keep_dim)){
+      message("Dropping ", sum(!keep_dim), " warped wisp reference(s) with mismatched dimensions.")
+      warped_refs = warped_refs[keep_dim]
+    }
+    ref_matrix = do.call(cbind, lapply(warped_refs, function(x){as.vector(x$imDat)}))
+    ref_combined = matrixStats::rowMedians(ref_matrix, na.rm = TRUE)
+    ref_combined[!is.finite(ref_combined)] = NA
+    ref_im_warp = warped_refs[[1]]
+    ref_im_warp$imDat = matrix(ref_combined, nrow = nrow(warped_refs[[1]]$imDat), ncol = ncol(warped_refs[[1]]$imDat))
+  }
+  if(!any(is.finite(ref_im_warp$imDat))){
+    stop("Combined long-wavelength wisp reference has no finite pixels after warping.")
+  }
   
   
   #Step X (not in paper, but put here for sky sub reasons)
   real_source = quantile(ref_im_warp$imDat, source_threshold, na.rm=TRUE)
-  sky_level = quantile(wisp_im$imDat[ref_im_warp$imDat < real_source], sky_threshold, na.rm=TRUE)
+  if(!is.finite(real_source)){
+    stop("Could not estimate real-source threshold from the long-wavelength wisp reference.")
+  }
+  sky_pixels = wisp_im$imDat[ref_im_warp$imDat < real_source]
+  if(any(is.finite(sky_pixels))){
+    sky_level = quantile(sky_pixels, sky_threshold, na.rm=TRUE)
+  }else{
+    sky_level = median(wisp_im$imDat, na.rm=TRUE)
+  }
+  if(!is.finite(sky_level)){
+    stop("Could not estimate short-channel sky level during wisp removal.")
+  }
   wisp_im$imDat = (wisp_im$imDat - sky_level)
   
   #Step 2i
@@ -2033,9 +2526,16 @@ wispFixer = function(wisp_im, ref_im,
   
   #step 2iii
   relflux = relflux[relflux > 0] #ignore -ve noise
+  relflux = relflux[is.finite(relflux)]
+  if(length(relflux) == 0){
+    stop("No finite positive source pixels available to scale the long-wavelength wisp reference.")
+  }
   
   #Step 2iv
   scale = quantile(relflux, scale_threshold, na.rm=T) #find blue things
+  if(!is.finite(scale)){
+    stop("Could not estimate wisp reference scale.")
+  }
   
   #Step 3
   wisp_template = wisp_im$imDat - ref_im_warp$imDat*scale
@@ -2150,10 +2650,11 @@ do_help = function(input_args){
       do_MIRI = do_MIRI, ## <-- Process MIRI, boolean
       
       cores_pro = cores_pro, ## <-- Cores for processing, numeric
+      cores_wisp = cores_wisp, ## <-- Concurrent files to process during wisp removal, numeric
       cores_stack = cores_stack, ## <-- Cores for stacking with ProPane, numeric
       tasks_stack = tasks_stack, ## <-- Cores for parallel stacking jobs, numeric
   
-      SIGMA_LO = NULL #keep blurring at wisp rem stage off by default, otherwise numeric, standard deviation of Gaussian kernel to blur derived wisp template
+      SIGMA_LO = additional_params$wisp_sigma_lo #broad Gaussian kernel for derived wisp template; NULL disables
     )'
   )
   
@@ -2245,9 +2746,12 @@ make_directory_structure = function(){
 load_raw_files = function(dir_raw){
   
   cal_files = c(
-    list.files(dir_raw, pattern = ".fits$", full.names = T, recursive = T),
+    list.files(dir_raw, pattern = "_cal[.]fits$", full.names = T, recursive = T),
     NULL
   )
+  cal_files = as.character(cal_files)
+  cal_files = cal_files[!is.na(cal_files) & nzchar(cal_files)]
+  cal_files = cal_files[file.exists(cal_files)]
   
   return(cal_files)
 }
