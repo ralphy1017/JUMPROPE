@@ -170,6 +170,219 @@ load_files = function(input_args, which_module, sky_info = NULL){
   
 }
 
+jumpropeStackWarpMed = function(filelist = NULL, dirlist = NULL, extlist = 1,
+                                pattern = NULL, recursive = TRUE, zap = NULL,
+                                keyvalues_out = NULL, chunk = 128L,
+                                max_block_mb = 512, useCUTLO = TRUE){
+  timestart = proc.time()[3]
+
+  if(is.null(filelist)){
+    if(is.null(dirlist)){
+      stop("jumpropeStackWarpMed needs either filelist or dirlist.")
+    }
+    filelist = unlist(lapply(dirlist, function(path){
+      list.files(path, pattern = pattern, recursive = recursive, full.names = TRUE)
+    }), use.names = FALSE)
+  }
+
+  filelist = sort(unique(as.character(filelist)))
+  filelist = filelist[!is.na(filelist) & nzchar(filelist) & file.exists(filelist)]
+  if(length(filelist) == 0L){
+    stop("No dumped warped image files matched the median-stack input.")
+  }
+
+  if(length(extlist) == 1L){
+    extlist = rep(extlist, length(filelist))
+  }
+
+  image_list = Rfits::Rfits_make_list(
+    filelist = filelist,
+    extlist = extlist,
+    pointer = TRUE,
+    cores = 1,
+    zap = zap
+  )
+
+  if(!is.null(keyvalues_out)){
+    overlap = vapply(seq_along(image_list), function(i){
+      tryCatch(
+        Rwcs::Rwcs_overlap(image_list[[i]]$keyvalues, keyvalues_ref = keyvalues_out, buffer = 0),
+        error = function(e){
+          message(
+            "  Could not WCS-check median dump overlap for ",
+            basename(filelist[[i]]), "; keeping it. Reason: ", conditionMessage(e)
+          )
+          TRUE
+        }
+      )
+    }, logical(1))
+    which_overlap = which(overlap)
+    image_list = image_list[which_overlap]
+    filelist = filelist[which_overlap]
+  }else{
+    which_overlap = seq_along(image_list)
+  }
+
+  if(length(image_list) == 0L){
+    stop("No dumped warped image files overlap the requested median stack WCS.")
+  }
+
+  if(!is.null(keyvalues_out)){
+    if(isTRUE(keyvalues_out$ZIMAGE)){
+      NAXIS1 = keyvalues_out$ZNAXIS1
+      NAXIS2 = keyvalues_out$ZNAXIS2
+    }else{
+      NAXIS1 = keyvalues_out$NAXIS1
+      NAXIS2 = keyvalues_out$NAXIS2
+    }
+  }else{
+    NAXIS1 = image_list[[1]]$dim[1]
+    NAXIS2 = image_list[[1]]$dim[2]
+    keyvalues_out = image_list[[1]]$keyvalues
+  }
+
+  NAXIS1 = suppressWarnings(as.integer(NAXIS1))
+  NAXIS2 = suppressWarnings(as.integer(NAXIS2))
+  if(length(NAXIS1) != 1L || length(NAXIS2) != 1L ||
+     is.na(NAXIS1) || is.na(NAXIS2) || NAXIS1 < 1L || NAXIS2 < 1L){
+    stop("Median stack output dimensions are invalid.")
+  }
+
+  chunk = suppressWarnings(as.integer(chunk))
+  if(length(chunk) != 1L || is.na(chunk) || chunk < 1L){
+    chunk = 128L
+  }
+  max_block_mb = suppressWarnings(as.numeric(max_block_mb))
+  if(length(max_block_mb) == 1L && !is.na(max_block_mb) && max_block_mb > 0){
+    max_chunk = floor((max_block_mb * 1024^2) / (max(1L, NAXIS2) * length(image_list) * 8))
+    if(length(max_chunk) == 1L && !is.na(max_chunk) && max_chunk > 0L){
+      chunk = min(chunk, as.integer(max_chunk))
+    }
+  }
+  chunk = max(1L, min(chunk, NAXIS1))
+
+  message(
+    "  Median stacking ", length(image_list), " dumped warped frame(s) with ",
+    "JUMPROPE sequential chunker; chunk=", chunk, " row(s)."
+  )
+
+  image_stack = matrix(NA_real_, NAXIS1, NAXIS2)
+  weight_stack = matrix(0L, NAXIS1, NAXIS2)
+  x_starts = seq.int(1L, NAXIS1, by = chunk)
+  read_failures = character()
+
+  for(block_idx in seq_along(x_starts)){
+    message("  Median stacking row chunk ", block_idx, " of ", length(x_starts))
+    xlo = x_starts[[block_idx]]
+    xhi = min(xlo + chunk - 1L, NAXIS1)
+    block_nrow = xhi - xlo + 1L
+    block_npix = block_nrow * NAXIS2
+    block_mat = matrix(NA_real_, nrow = block_npix, ncol = length(image_list))
+
+    for(img_idx in seq_along(image_list)){
+      image_pointer = image_list[[img_idx]]
+      image_dim = suppressWarnings(as.integer(image_pointer$dim))
+      if(length(image_dim) < 2L || any(is.na(image_dim[1:2])) || any(image_dim[1:2] < 1L)){
+        next
+      }
+
+      if(!is.null(image_pointer$keyvalues$XCUTLO) && useCUTLO){
+        XCUTLO = suppressWarnings(as.integer(image_pointer$keyvalues$XCUTLO))
+      }else{
+        XCUTLO = 1L
+      }
+      if(!is.null(image_pointer$keyvalues$YCUTLO) && useCUTLO){
+        YCUTLO = suppressWarnings(as.integer(image_pointer$keyvalues$YCUTLO))
+      }else{
+        YCUTLO = 1L
+      }
+      if(length(XCUTLO) != 1L || is.na(XCUTLO)){ XCUTLO = 1L }
+      if(length(YCUTLO) != 1L || is.na(YCUTLO)){ YCUTLO = 1L }
+
+      image_x = c(XCUTLO, XCUTLO + image_dim[[1]] - 1L)
+      image_y = c(YCUTLO, YCUTLO + image_dim[[2]] - 1L)
+      x_int = c(max(xlo, image_x[[1]]), min(xhi, image_x[[2]]))
+      y_int = c(max(1L, image_y[[1]]), min(NAXIS2, image_y[[2]]))
+      if(x_int[[1]] > x_int[[2]] || y_int[[1]] > y_int[[2]]){
+        next
+      }
+
+      local_x = seq.int(x_int[[1]] - XCUTLO + 1L, x_int[[2]] - XCUTLO + 1L)
+      local_y = seq.int(y_int[[1]] - YCUTLO + 1L, y_int[[2]] - YCUTLO + 1L)
+      sub_dat = tryCatch(
+        image_pointer[local_x, local_y]$imDat,
+        error = function(e){
+          if(!(filelist[[img_idx]] %in% read_failures)){
+            message(
+              "  Skipping unreadable median dump ",
+              basename(filelist[[img_idx]]), ": ", conditionMessage(e)
+            )
+            read_failures <<- c(read_failures, filelist[[img_idx]])
+          }
+          NULL
+        }
+      )
+      if(is.null(sub_dat)){
+        next
+      }
+      if(is.null(dim(sub_dat)) ||
+         !identical(as.integer(dim(sub_dat)[1:2]), c(length(local_x), length(local_y)))){
+        sub_dat = matrix(as.vector(sub_dat), nrow = length(local_x), ncol = length(local_y))
+      }
+
+      row_pos = seq.int(x_int[[1]] - xlo + 1L, x_int[[2]] - xlo + 1L)
+      col_pos = seq.int(y_int[[1]], y_int[[2]])
+      block_index = as.vector(outer(row_pos, (col_pos - 1L) * block_nrow, "+"))
+      block_mat[block_index, img_idx] = as.vector(sub_dat)
+    }
+
+    weight_vec = rowSums(!is.na(block_mat))
+    median_vec = matrixStats::rowMedians(block_mat, na.rm = TRUE)
+    median_vec[weight_vec == 0L] = NA_real_
+    image_stack[xlo:xhi, ] = matrix(median_vec, nrow = block_nrow, ncol = NAXIS2)
+    weight_stack[xlo:xhi, ] = matrix(as.integer(weight_vec), nrow = block_nrow, ncol = NAXIS2)
+    rm(block_mat, weight_vec, median_vec)
+    gc()
+  }
+
+  keyvalues_image = keyvalues_out
+  keyvalues_image$EXTNAME = "image"
+  if(!is.null(image_list[[1]]$keyvalues$MAGZERO)){
+    keyvalues_image$MAGZERO = image_list[[1]]$keyvalues$MAGZERO
+  }
+  keyvalues_image$R_VER = R.version$version.string
+  keyvalues_image$PANE_VER = as.character(utils::packageVersion("ProPane"))
+  keyvalues_image$RWCS_VER = as.character(utils::packageVersion("Rwcs"))
+
+  image_stack = Rfits::Rfits_create_image(
+    image_stack,
+    keyvalues = keyvalues_image,
+    keypass = FALSE,
+    history = "Stacked with jumpropeStackWarpMed"
+  )
+
+  keyvalues_weight = keyvalues_image
+  keyvalues_weight$EXTNAME = "weight"
+  keyvalues_weight$MAGZERO = NULL
+  weight_stack = Rfits::Rfits_create_image(
+    weight_stack,
+    keyvalues = keyvalues_weight,
+    keypass = FALSE
+  )
+
+  time_taken = proc.time()[3] - timestart
+  message("  Median time taken: ", signif(time_taken, 4), " seconds")
+  output = list(
+    image = image_stack,
+    weight = weight_stack,
+    which_overlap = which_overlap,
+    time = time_taken,
+    Nim = length(which_overlap)
+  )
+  class(output) = "ProPane"
+  invisible(output)
+}
+
 ## Processing codes
 do_1of = function(input_args){
   
@@ -774,7 +987,8 @@ do_super_sky = function(input_args){
     }, add = TRUE)
   }  
   
-  dummy = foreach(i = seq_len(dim(combine_grid)[1]), .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound", "ProPane", "imager"))%dopar%{
+  dummy = foreach(i = seq_len(dim(combine_grid)[1]), .inorder=FALSE, .packages = c("Rfits", "Rwcs", "ProFound", "ProPane", "imager", "foreach"))%dopar%{
+    foreach::registerDoSEQ()
     if(combine_grid[i,1] %in% c('NRCA1','NRCA2','NRCA3','NRCA4','NRCB1','NRCB2','NRCB3','NRCB4')){
       temp_info = sky_info[sky_info$detector == combine_grid[i,1] & sky_info$filter == combine_grid[i,2] & sky_info$skychi < sky_ChiSq_cut & sky_info$goodpix >= good_pix_cut, ]
     }else if (combine_grid[i,1] %in% c('MIRIMAGE')){
@@ -796,7 +1010,7 @@ do_super_sky = function(input_args){
           return(sky_temp)
         }
       })
-      sky_mean = ProPane::propaneStackFlatFunc(sky_frames_list, imager_func = function(xx){imager::average(xx, na.rm = TRUE)}, cores =1)$image
+      sky_mean = ProPane::propaneStackFlatFunc(sky_frames_list, imager_func = function(xx){imager::average(xx, na.rm = TRUE)}, cores = 1, multitype = "none")$image
     }else{
       message("No usable data for ", combine_grid[i,1]," ",combine_grid[i,2])
       temp_file = sky_info[sky_info$detector == combine_grid[i,1] & sky_info$filter == combine_grid[i,2],'fileim'][1]
@@ -1251,10 +1465,19 @@ do_gen_stack = function(input_args){
   cores = input_args$cores_stack
   tasks = input_args$tasks_stack
   
+  additional_params = input_args$additional_params
   skip_completed_files = additional_params$skip_completed_files
-  parallel_type = input_args$additional_params$parallel_type
+  parallel_type = additional_params$parallel_type
+  median_stack_chunk = suppressWarnings(as.integer(additional_params$median_stack_chunk))
+  if(length(median_stack_chunk) != 1L || is.na(median_stack_chunk) || median_stack_chunk < 1L){
+    median_stack_chunk = 128L
+  }
+  median_stack_max_block_mb = suppressWarnings(as.numeric(additional_params$median_stack_max_block_mb))
+  if(length(median_stack_max_block_mb) != 1L || is.na(median_stack_max_block_mb) || median_stack_max_block_mb <= 0){
+    median_stack_max_block_mb = 512
+  }
   
-  ref_cat = input_args$additional_params$ref_cat
+  ref_cat = additional_params$ref_cat
   if(is.null(ref_cat)){
     do_tweak = FALSE
   }else{
@@ -1400,76 +1623,48 @@ do_gen_stack = function(input_args){
     detected_cores = parallel::detectCores(logical = TRUE)
     psock_stack_requested = !is.null(parallel_type) && toupper(parallel_type) %in% c("PSOCK", "SOCK")
 
-    if(stack_tasks_requested > 1){
-      stack_tasks = max(1, min(stack_tasks_requested, max_stack_tasks, hi_loop))
-      if(!is.na(detected_cores)){
-        stack_tasks = min(stack_tasks, detected_cores)
-      }
-      stack_cores_effective = 1
-      stack_parallel_mode = "outer"
-      stack_multitype = "none"
-      if(stack_tasks_requested > stack_tasks){
-        message(
-          "Capping stacking to ", stack_tasks, " concurrent task(s). Requested tasks_stack=",
-          stack_tasks_requested, "; max_stack_tasks=", max_stack_tasks,
-          "; available stack rows=", hi_loop, "."
-        )
-      }
-      if(stack_cores_requested > 1){
-        message(
-          "Ignoring cores_stack=", stack_cores_requested,
-          " while tasks_stack > 1. ProPane uses a global foreach backend internally; ",
-          "nested stacking workers can deadlock or stall."
-        )
-      }
+    stack_tasks = max(1, min(stack_tasks_requested, max_stack_tasks, hi_loop))
+    if(!is.na(detected_cores)){
+      stack_tasks = min(stack_tasks, detected_cores)
+    }
+    stack_cores_effective = 1
+    stack_parallel_mode = if(stack_tasks > 1) "outer" else "serial"
+    stack_multitype = "none"
+    if(stack_tasks_requested > stack_tasks){
       message(
-        "Stack parallelization: ",
-        stack_tasks, " concurrent stack task(s) x sequential ProPane internals."
-      )
-      if(psock_stack_requested){
-        message(
-          "Ignoring parallel_type=", parallel_type,
-          " for stacking outer tasks. ProPane/Rwcs use global foreach state internally; ",
-          "PSOCK outer workers can keep triggering nested task export errors."
-        )
-      }
-    }else{
-      stack_tasks = 1
-      if(psock_stack_requested){
-        stack_cores_effective = 1
-        stack_parallel_mode = "serial"
-        stack_multitype = "none"
-        if(stack_cores_requested > 1){
-          message(
-            "Forcing ProPane cores to 1 under PSOCK. ProPane's internal stacking ",
-            "parallelism uses foreach/fork semantics and is not reliable inside PSOCK runs."
-          )
-        }
-      }else{
-        stack_cores_effective = stack_cores_requested
-        if(!is.na(detected_cores)){
-          stack_cores_effective = min(stack_cores_effective, detected_cores)
-        }
-        stack_parallel_mode = "inner"
-        stack_multitype = if(stack_cores_effective > 1) "fork" else "none"
-      }
-      message(
-        "Stack parallelization: 1 stack task x up to ",
-        stack_cores_effective, " ProPane core(s) per task."
+        "Capping stacking to ", stack_tasks, " concurrent task(s). Requested tasks_stack=",
+        stack_tasks_requested, "; max_stack_tasks=", max_stack_tasks,
+        "; available stack rows=", hi_loop, "."
       )
     }
+    if(stack_cores_requested > 1){
+      message(
+        "Ignoring cores_stack=", stack_cores_requested,
+        " for stacking. JUMPROPE now parallelizes stacking only across independent ",
+        "stack jobs; each stack uses one-core ProPane projection plus the local ",
+        "sequential median stacker."
+      )
+    }
+    if(psock_stack_requested){
+      message(
+        "Ignoring parallel_type=", parallel_type,
+        " for stacking. ProPane/Rwcs use global foreach state internally; ",
+        "forked outer stack jobs with one-core internals are safer on Linux."
+      )
+    }
+    message(
+      "Stack parallelization: ",
+      stack_tasks, " concurrent stack task(s) x one-core stack internals. ",
+      "Median chunks use up to ", median_stack_chunk, " row(s) and ",
+      median_stack_max_block_mb, " MB for the per-chunk value matrix."
+    )
 
-    cl = NULL
-    if(stack_tasks > 1){
-      registerDoParallel(cores = stack_tasks)
-    }else{
-      registerDoSEQ()
-    }
-    
-   tryCatch({
-   dummy = foreach(i = lo_loop:hi_loop, .packages = c('Rwcs', 'Rfits', 'ProPane', 'ProFound', 'foreach'))%dopar%{
-     foreach::registerDoSEQ()
-     message('Stacking ', i,' of ',hi_loop)
+    registerDoSEQ()
+    stack_indices = lo_loop:hi_loop
+    stack_one_row = function(i){
+      foreach::registerDoSEQ()
+      on.exit(foreach::registerDoSEQ(), add = TRUE)
+      message('Stacking ', i,' of ',hi_loop)
       for(j in module_list){
         if( !(skip_completed_files & file.exists(paste0(invar_dir, '/stack_',stack_grid[i,'VISIT_ID'],'_',stack_grid[i,'FILTER'],'_',j,'.fits'))) ){
           message('  Processing ',stack_grid[i,'VISIT_ID'],' ',stack_grid[i,'FILTER'], ' ', j)
@@ -1685,14 +1880,13 @@ do_gen_stack = function(input_args){
           output_stack$image$keycomments = rep(list(''), length(unique(names(output_stack$image$keyvalues))))
           names(output_stack$image$keycomments) = output_stack$image$keynames
           
-          if(stack_multitype == "none"){
-            foreach::registerDoSEQ()
-          }
-          median_stack = propaneStackWarpMed(dirlist = dump_stub,
-                                             pattern = glob2rx('*image_warp*'),
-                                             keyvalues_out = output_stack$image$keyvalues,
-                                             cores = stack_cores,
-                                             multitype = stack_multitype)
+          median_stack = jumpropeStackWarpMed(
+            dirlist = dump_stub,
+            pattern = glob2rx('*image_warp*'),
+            keyvalues_out = output_stack$image$keyvalues,
+            chunk = median_stack_chunk,
+            max_block_mb = median_stack_max_block_mb
+          )
           foreach::registerDoSEQ()
           
           file.remove(temp_file)
@@ -1713,13 +1907,31 @@ do_gen_stack = function(input_args){
      }
      return(NULL)
     }
-   }, finally = {
-     if(stack_tasks > 1){
-       try(stopImplicitCluster(), silent = TRUE)
-     }
-     registerDoSEQ()
-   })
-   gc()
+    stack_results = if(stack_tasks > 1){
+      parallel::mclapply(
+        stack_indices,
+        stack_one_row,
+        mc.cores = stack_tasks,
+        mc.preschedule = FALSE
+      )
+    }else{
+      lapply(stack_indices, stack_one_row)
+    }
+    stack_failed = vapply(stack_results, inherits, logical(1), "try-error")
+    if(any(stack_failed)){
+      failed_rows = stack_indices[stack_failed]
+      failed_messages = vapply(stack_results[stack_failed], function(x){
+        paste(as.character(x), collapse = " ")
+      }, character(1))
+      stop(
+        "Stack task(s) failed for row(s) ",
+        paste(failed_rows, collapse = ", "),
+        ":\n",
+        paste(failed_messages, collapse = "\n")
+      )
+    }
+    registerDoSEQ()
+    gc()
 }
 do_wisp_rem = function(input_args){
   
@@ -2274,9 +2486,9 @@ do_RGB = function(input_args){
                                             keyvalues = temp_proj))
     }
     
-    R_stack = propaneStackWarpInVar(red_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
-    G_stack = propaneStackWarpInVar(green_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
-    B_stack = propaneStackWarpInVar(blue_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores=1)
+    R_stack = propaneStackWarpInVar(red_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores = 1, multitype = "none")
+    G_stack = propaneStackWarpInVar(green_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores = 1, multitype = "none")
+    B_stack = propaneStackWarpInVar(blue_images, keyvalues_out = temp_proj, magzero_in = 23.9, magzero_out = 23.9, cores = 1, multitype = "none")
     registerDoSEQ()
     
     temp = R_stack$image

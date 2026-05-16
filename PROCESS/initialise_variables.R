@@ -59,6 +59,9 @@ initialise_params = function(){
    NAXIS_long = NULL, ## Size of the long pixel scales mosaic, keep NULL for default (3000 pixels) 
    NAXIS_short = NULL, ## Size of the short pixel scales mosaic, keep NULL for default (6000 pixels) 
    module_list = NULL, ## What modules should we stack, options are ('NRCA_short', 'NRCA_long', 'NRCB_short', 'NRCB_long', 'NIS', 'MIRIMAGE')
+   max_stack_tasks = 8, ## Safety cap for concurrent stack jobs
+   median_stack_chunk = 128, ## Rows per chunk for the local sequential median stacker
+   median_stack_max_block_mb = 512, ## Memory cap for each median value matrix
    
    parallel_type = 'PSOCK' ## type options for makeCluster in parallel for stacking and wisp removal, type='PSOCK' might be more stable on Linux systems
   )
