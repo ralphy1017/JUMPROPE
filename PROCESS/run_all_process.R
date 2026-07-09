@@ -70,9 +70,7 @@ main = function(){
     ref_dir = make_directory_structure()
   }
   
-  if(do_NIRISS){
-      FILT = "CLEAR|NIS"
-    }
+  ## For NIRISS, leave FILT empty unless the user explicitly supplied a real science filter.
   
   cal_sky_info_save_dir = paste0(ref_dir, "/Pro1oF/")
   Pro1oF_dir = paste0(ref_dir, "/Pro1oF/cal/")
@@ -131,7 +129,7 @@ main = function(){
       SIGMA_LO = NULL #keep blurring at wisp rem stage off by default
     )
    
-    if(length(args) <= 1){
+    if(length(args) <= 1 & !input_args$do_NIRISS){
       input_args$FILT = "F277W|F356W|F444W|F250M|F300M|F335M|F360M|F410M|F430M|F460M|F480M|F323N|F405N|F466N|F470N" ## Process long wavelengths first
 
     }
@@ -146,7 +144,7 @@ main = function(){
     do_gen_stack(input_args)
   
     if(input_args$do_NIRISS){
-      input_args$FILT = "CLEAR"
+      input_args$FILT = ""
       do_patch(input_args)
     }else if(input_args$do_MIRI){
       do_patch(input_args)

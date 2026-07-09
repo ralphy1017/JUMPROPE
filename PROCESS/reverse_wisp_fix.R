@@ -55,7 +55,7 @@ unique_visits = unique(info_wisp$VID)
 message("Reversing wisp correction on short wavelength detectors:")
 cat('Processing',dim(info_wisp)[1],'files\n')
 
-temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop")%dopar%{
+temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop", .packages = c("Rfits"))%dopar%{
   ## copy original data to directory where we keep the wisps
   vid = paste0(info_wisp$VID[ii])
   modl = paste0("NRC", info_wisp$MODULE[ii])
@@ -66,4 +66,3 @@ temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop")%dopar%{
     Rfits_write_pix(data = wisp_frame$SCI_ORIG[,]$imDat, filename = info_wisp$full[ii], ext = 2) 
   }
 }
-

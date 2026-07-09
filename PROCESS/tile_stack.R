@@ -11,6 +11,15 @@ library(data.table)
 library(stringr)
 library(Cairo)
 
+jwst_dq_do_not_use_mask = function(temp_mask){
+  mask_dim = dim(temp_mask)
+  output = as.numeric(temp_mask) %% 2 == 1
+  if(!is.null(mask_dim)){
+    dim(output) = mask_dim
+  }
+  output
+}
+
 ## -- START OF EDIT --
 
 ## User defined inputs here, for example
@@ -245,7 +254,7 @@ deep_stacker = function(input_args){
             image = temp_image,
             patch = T
           )
-          JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
+          JWST_cal_mask = profoundDilate(jwst_dq_do_not_use_mask(temp_mask), size=3)
           temp_image$imDat[JWST_cal_mask==1] = NA
           return(temp_image)
         })

@@ -120,9 +120,7 @@ zork = function(){
     ref_dir = make_directory_structure()
   }
   
-  if(do_NIRISS){
-      FILT = "CLEAR|NIS"
-    }
+  ## For NIRISS, leave FILT empty unless the user explicitly supplied a real science filter.
   
   cal_sky_info_save_dir = paste0(ref_dir, "/Pro1oF/")
   Pro1oF_dir = paste0(ref_dir, "/Pro1oF/cal/")
@@ -186,6 +184,7 @@ zork = function(){
       median_dir = median_dir, 
       patch_dir = patch_dir,
       dump_dir = dump_dir, 
+      raw_dir = dir_raw,
       
       magzero = 23.9,
       

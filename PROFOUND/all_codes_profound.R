@@ -1553,7 +1553,7 @@ hst_warp_stack = function(input_args){
       NFilters = length(hst_filters)
       
       #loop through HST filters
-      foreach(j = 1:NFilters)%dopar%{
+      foreach(j = 1:NFilters, .packages = c("Rfits", "ProFound", "ProPane", "celestial"))%dopar%{
         hst_info = hst_key_scan[hst_key_scan$FILTER==hst_filters[j], ]
         hst_filter = unique(hst_info$FILTER)
         hst_detector = unique(hst_info$DETECTOR)
