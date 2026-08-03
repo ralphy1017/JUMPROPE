@@ -40,6 +40,7 @@ select_code_func = function(){
           ## 11 = Wisp remove                                       ##
           ## 12 = Reverse wisp removal                              ##
           ## 13 = Help                                              ##
+          ## 14 = Cleanup                                            ##
           ##                                                        ##
           ##  e.g., 1,2,3,4,5,6,7,8,11 for everything + wisp rem    ##
           ## CONTROL + /\ to EXIT                                    ##
@@ -153,7 +154,8 @@ zork = function(){
     'do_rgb' = do_RGB,
     'do_wisp_rem' = do_wisp_rem,
     'do_wisp_reverse' = do_wisp_reverse,
-    'do_help' = do_help
+    'do_help' = do_help,
+    'do_cleanup' = do_cleanup
   )
   
   #VID_list = ifelse(VID != "", unlist(strsplit(VID, "|", fixed = T)), list(c("")))
@@ -202,6 +204,11 @@ zork = function(){
     )
     
     lapply(select_code,function(x){code_organiser[[x]](input_args)})
+  }
+  cleanup_flag = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_CLEANUP"))
+  if(cleanup_flag){
+    message("JUMPROPE_CLEANUP=TRUE: running post-run cleanup sweep over all VIDs...")
+    do_cleanup(input_args)
   }
 }
 

@@ -4,8 +4,8 @@ export JUMPROPE_CRDS_PATH='/Volumes/Expansion/crds'
 export JUMPROPE_CRDS_CONTEXT='jwst_1140.pmap'
 
 
-#export JUMPROPE_REF_DIR='/data5/rzi/JUMPROPE' ## I recommend you keep this commented. Only add when you are certain the directory structure has been made. The code will auto prompt you to create it on first run.
-export JUMPROPE_RAW_DIR='/data4/rzi/NIRCAM/cal'
+export JUMPROPE_REF_DIR='/data1/rzi/jumprope/skysurfir' ## I recommend you keep this commented. Only add when you are certain the directory structure has been made. The code will auto prompt you to create it on first run.
+export JUMPROPE_RAW_DIR='/data7/rzi/PEARLSplus/nircam/cal'
 
 export JUMPROPE_do_NIRISS=F
 export JUMPROPE_do_MIRI=F
@@ -24,3 +24,5 @@ export JUMPROPE_tasks_stack=4 #Number of stacking tasks to run
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+
+export JUMPROPE_CLEANUP=FALSE  # TRUE = auto-delete intermediates after each run when wisp-verified

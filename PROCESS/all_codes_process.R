@@ -2374,3 +2374,132 @@ load_raw_files = function(dir_raw){
   
   return(cal_files)
 }
+
+
+do_cleanup = function(input_args){
+
+  cat("\n")
+  message("## Running Cleanup ##")
+  cat("\n")
+
+  do_cleanup_flag = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_CLEANUP"))
+  if(!do_cleanup_flag){
+    message("JUMPROPE_CLEANUP is not TRUE. Skipping cleanup.")
+    return(invisible(NULL))
+  }
+
+  ref_dir            = input_args$ref_dir
+  cal_sky_renorm_dir = input_args$cal_sky_renorm_dir
+  cal_sky_dir        = input_args$cal_sky_dir
+  sky_frames_dir     = input_args$sky_frames_dir
+  invar_dir          = input_args$invar_dir
+  median_dir         = input_args$median_dir
+  patch_dir          = input_args$patch_dir
+  dump_dir           = input_args$dump_dir
+  additional_params  = input_args$additional_params
+  do_claws           = additional_params$do_claws
+
+  # Short-wave detectors targeted by wisp removal
+  if(isTRUE(do_claws)){
+    short_detectors = c("nrca1", "nrca2", "nrca3", "nrca4", "nrcb1", "nrcb2", "nrcb3", "nrcb4")
+  }else{
+    short_detectors = c("nrca3", "nrca4", "nrcb3", "nrcb4")
+  }
+
+  # Discover all VIDs present in median_dir (pattern: med_{VID}_{FILTER}_{MODULE}.fits)
+  med_files = list.files(median_dir, pattern = "^med_[0-9]+_.*\\.fits$", full.names = FALSE)
+  if(length(med_files) == 0){
+    message("No median stacks found — nothing to clean up.")
+    return(invisible(NULL))
+  }
+  all_vids = unique(gsub("^med_([0-9]+)_.*$", "\\1", med_files))
+  message(paste0("Found ", length(all_vids), " VID(s) with median stacks: ", paste(all_vids, collapse = ", ")))
+
+  for(vid in all_vids){
+
+    message(paste0("\n--- Checking VID ", vid, " ---"))
+
+    # Safeguard 1: cal_sky_renorm files must exist for this VID (steps 1-6 complete)
+    renorm_files = list.files(cal_sky_renorm_dir,
+                              pattern = glob2rx(paste0("*", vid, "*.fits")),
+                              full.names = TRUE)
+    if(length(renorm_files) == 0){
+      message(paste0("VID ", vid, ": no cal_sky_renorm files — skipping"))
+      next
+    }
+    message(paste0("VID ", vid, ": ", length(renorm_files), " cal_sky_renorm files found"))
+
+    # Safeguard 2: one representative short-wave file per detector must carry SCI_ORIG
+    # (confirms wisp removal was applied AND re-propagated into final products)
+    wisp_check_files = character(0)
+    for(det in short_detectors){
+      det_files = renorm_files[grepl(paste0("_", det, "_"), renorm_files)]
+      if(length(det_files) > 0){
+        wisp_check_files = c(wisp_check_files, det_files[1])
+      }
+    }
+
+    if(length(wisp_check_files) == 0){
+      # No short-wave files (NIRISS/MIRI-only VID) — no wisp removal expected, allow cleanup
+      message(paste0("VID ", vid, ": no short-wave files — assuming NIRISS/MIRI-only, skipping wisp check"))
+      wisp_done = TRUE
+    }else{
+      wisp_done = all(sapply(wisp_check_files, function(f){
+        "SCI_ORIG" %in% na.omit(Rfits_extnames(f))
+      }))
+    }
+
+    if(!wisp_done){
+      message(paste0("VID ", vid, ": SCI_ORIG missing in one or more short-wave renorm files — wisp removal not fully propagated, skipping cleanup"))
+      next
+    }
+    message(paste0("VID ", vid, ": wisp removal confirmed — cleaning up intermediates"))
+
+    # Remove dump/{vid}/ tree
+    dump_vid = file.path(dump_dir, vid)
+    if(dir.exists(dump_vid)){
+      message(paste0("  Removing ", dump_vid))
+      unlink(dump_vid, recursive = TRUE)
+    }
+
+    # Remove InVar stack files for this VID
+    del_invar = list.files(invar_dir, pattern = glob2rx(paste0("stack_", vid, "_*.fits")), full.names = TRUE)
+    if(length(del_invar) > 0){
+      message(paste0("  Removing ", length(del_invar), " InVar stack files"))
+      file.remove(del_invar)
+    }
+
+    # Remove Median stack files for this VID
+    del_median = list.files(median_dir, pattern = glob2rx(paste0("med_", vid, "_*.fits")), full.names = TRUE)
+    if(length(del_median) > 0){
+      message(paste0("  Removing ", length(del_median), " Median stack files"))
+      file.remove(del_median)
+    }
+
+    # Remove Patch stack files for this VID (may not exist)
+    del_patch = list.files(patch_dir, pattern = glob2rx(paste0("patch_", vid, "_*.fits")), full.names = TRUE)
+    if(length(del_patch) > 0){
+      message(paste0("  Removing ", length(del_patch), " Patch stack files"))
+      file.remove(del_patch)
+    }
+
+    # Remove cal_sky/ files for this VID (VID embedded in JWST filename)
+    del_cal_sky = list.files(cal_sky_dir, pattern = glob2rx(paste0("*", vid, "*.fits")), full.names = TRUE)
+    if(length(del_cal_sky) > 0){
+      message(paste0("  Removing ", length(del_cal_sky), " cal_sky files"))
+      file.remove(del_cal_sky)
+    }
+
+    # Remove sky_frames/ files for this VID (VID embedded in JWST filename)
+    del_sky_frames = list.files(sky_frames_dir, pattern = glob2rx(paste0("*", vid, "*.fits")), full.names = TRUE)
+    if(length(del_sky_frames) > 0){
+      message(paste0("  Removing ", length(del_sky_frames), " sky_frames files"))
+      file.remove(del_sky_frames)
+    }
+
+    message(paste0("VID ", vid, ": cleanup complete"))
+  }
+
+  message("\nCleanup sweep finished.")
+  return(invisible(NULL))
+}
