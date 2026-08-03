@@ -27,4 +27,11 @@ export MKL_NUM_THREADS=1
 
 export JUMPROPE_CLEANUP=TRUE  # TRUE = auto-delete intermediates after each run when wisp-verified
 
-export JUMPROPE_DUMP_DIR=/dev/shm/jumprope_dump  # RAM disk — eliminates dump frame I/O bottleneck (376 GB available on omega)
+export JUMPROPE_DUMP_DIR=/dev/shm/jumprope_dump  # RAM disk — eliminates dump frame I/O bottleneck (751 GB available on omega)
+
+# Stage cal_sky_renorm to RAM before stacking: run "source stage_to_ram.sh" first,
+# then uncomment this line. Eliminates source-file I/O during propaneStackWarpInVar.
+# export JUMPROPE_CAL_SKY_RENORM_DIR=/dev/shm/jumprope_cal_sky_renorm
+
+# With both dump + input in /dev/shm, stacking is CPU-bound -- raise tasks_stack:
+# export JUMPROPE_tasks_stack=8   # 8 jobs x 8 cores each when fully RAM-bound
