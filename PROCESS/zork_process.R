@@ -137,28 +137,35 @@ zork = function(){
   median_dir = paste0(ref_dir, "/Median_Stacks/")
   patch_dir = paste0(ref_dir, "/Patch_Stacks/")
 
-  ## ── RAM mode: redirect intermediates to /dev/shm, keep cal_sky_renorm on disk ──
+
+  ## ── RAM mode: stage ALL intermediates + cal_sky_renorm to /dev/shm ──
+  ## On cleanup: SCI_ORIG verified in staging dir, cal_sky_renorm copied to
+  ## ref_dir/Pro1oF/cal_sky_renorm/ on disk, then /dev/shm is wiped.
   ## Works for 7-digit obs IDs (1176211) and 10-digit visit IDs (1176211001).
-  ## Safety ceiling: total RAM usage must not exceed 675 GB (of 751 GB).
+  cal_sky_renorm_persistent_dir = cal_sky_renorm_dir   # always the on-disk final destination
   ram_mode = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
   if(ram_mode){
-    mem_lines    = readLines("/proc/meminfo")
-    mem_total_kb = as.numeric(gsub("[^0-9]", "", mem_lines[grep("^MemTotal",     mem_lines)[1]]))
-    mem_avail_kb = as.numeric(gsub("[^0-9]", "", mem_lines[grep("^MemAvailable", mem_lines)[1]]))
-    mem_used_gb  = (mem_total_kb - mem_avail_kb) / 1048576
-    message(sprintf("RAM MODE check: %.1f GB used / 751 GB total (ceiling 675 GB)", mem_used_gb))
-    if(mem_used_gb > 675){
-      message(sprintf("  %.1f GB exceeds 675 GB ceiling — falling back to disk mode", mem_used_gb))
+    df_raw = tryCatch(system("df -k /dev/shm", intern=TRUE), error=function(e) character(0))
+    shm_avail_gb = if(length(df_raw) >= 2){
+      parts = strsplit(trimws(df_raw[2]), "\\s+")[[1]]
+      as.numeric(parts[4]) / 1048576   # kB -> GB
+    } else Inf
+    message(sprintf("RAM MODE: /dev/shm has %.0f GB available", shm_avail_gb))
+    if(shm_avail_gb < 50){
+      message(sprintf("  Only %.0f GB free in /dev/shm — falling back to disk mode", shm_avail_gb))
       ram_mode = FALSE
+    } else if(shm_avail_gb < 150){
+      message(sprintf("  WARNING: %.0f GB free — heavy observations may be tight", shm_avail_gb))
     }
   }
   if(ram_mode){
-    ram_work_dir = "/dev/shm/jumprope_work"
-    message(paste0("  Intermediates -> ", ram_work_dir))
-    message(paste0("  cal_sky_renorm (final products) -> ", cal_sky_renorm_dir))
+    ram_work_dir          = "/dev/shm/jumprope_work"
+    message(paste0("  Staging all intermediates + cal_sky_renorm -> ", ram_work_dir))
+    message(paste0("  Final cal_sky_renorm (disk) -> ", cal_sky_renorm_persistent_dir))
     cal_sky_info_save_dir = paste0(ram_work_dir, "/Pro1oF/")
     Pro1oF_dir            = paste0(ram_work_dir, "/Pro1oF/cal/")
     cal_sky_dir           = paste0(ram_work_dir, "/Pro1oF/cal_sky/")
+    cal_sky_renorm_dir    = paste0(ram_work_dir, "/Pro1oF/cal_sky_renorm/")
     sky_pro_dir           = paste0(ram_work_dir, "/sky_pro/")
     sky_frames_dir        = paste0(ram_work_dir, "/sky_pro/sky_frames/")
     sky_super_dir         = paste0(ram_work_dir, "/sky_pro/sky_super/")
@@ -166,8 +173,9 @@ zork = function(){
     invar_dir             = paste0(ram_work_dir, "/InVar_Stacks/")
     median_dir            = paste0(ram_work_dir, "/Median_Stacks/")
     patch_dir             = paste0(ram_work_dir, "/Patch_Stacks/")
-    ## cal_sky_renorm_dir intentionally NOT overridden — stays on persistent ref_dir
+    ## cal_sky_renorm_persistent_dir stays on disk — copied from RAM in do_cleanup
   }
+
 
   
   raw_files = load_raw_files(dir_raw = dir_raw)
@@ -211,6 +219,7 @@ zork = function(){
       Pro1oF_dir = Pro1oF_dir,
       cal_sky_dir = cal_sky_dir,
       cal_sky_renorm_dir = cal_sky_renorm_dir,
+      cal_sky_renorm_persistent_dir = cal_sky_renorm_persistent_dir,
       cal_sky_info_save_dir = cal_sky_info_save_dir,
       
       sky_frames_dir = sky_frames_dir,

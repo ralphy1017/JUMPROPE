@@ -2388,14 +2388,21 @@ do_cleanup = function(input_args){
     return(invisible(NULL))
   }
 
-  ## ── RAM mode cleanup: verify cal_sky_renorm on disk, then wipe /dev/shm work dir ──
+
+  ## ── RAM mode cleanup: verify staged cal_sky_renorm, copy to disk, wipe /dev/shm ──
   do_ram_mode  = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
   ram_work_dir = "/dev/shm/jumprope_work"
 
   if(do_ram_mode){
-    message("RAM mode cleanup: verifying cal_sky_renorm at ", cal_sky_renorm_dir)
+    ## Extract paths from input_args (in RAM mode these point to /dev/shm staging)
+    cal_sky_renorm_dir            = input_args$cal_sky_renorm_dir             # RAM staging path
+    cal_sky_renorm_persistent_dir = input_args$cal_sky_renorm_persistent_dir  # disk destination
+    median_dir                    = input_args$median_dir                     # RAM Median_Stacks
 
-    ## VID pattern matches both 7-digit obs IDs and 10-digit visit IDs embedded in med_ filenames
+    message("RAM mode cleanup: verifying staged cal_sky_renorm at ", cal_sky_renorm_dir)
+
+    ## Discover VIDs from median_dir (still in /dev/shm at this point)
+    ## Pattern matches 7-digit obs IDs and 10-digit visit IDs
     med_files = list.files(median_dir, pattern = "^med_[0-9]+_.*\\.fits$", full.names = FALSE)
     if(length(med_files) == 0){
       message("  No median stacks in RAM work dir (already cleaned or stacking not run)")
@@ -2406,7 +2413,7 @@ do_cleanup = function(input_args){
       return(invisible(NULL))
     }
     all_vids = unique(gsub("^med_([0-9]+)_.*$", "\\1", med_files))
-    message("  VIDs in RAM: ", paste(all_vids, collapse = ", "))
+    message("  VIDs in staging: ", paste(all_vids, collapse = ", "))
 
     additional_params = input_args$additional_params
     do_claws          = isTRUE(additional_params$do_claws)
@@ -2419,10 +2426,10 @@ do_cleanup = function(input_args){
     all_clear = TRUE
     for(vid in all_vids){
       renorm_files = list.files(cal_sky_renorm_dir,
-                                pattern   = glob2rx(paste0("*", vid, "*.fits")),
+                                pattern    = glob2rx(paste0("*", vid, "*.fits")),
                                 full.names = TRUE)
       if(length(renorm_files) == 0){
-        message("  VID ", vid, ": no cal_sky_renorm on disk — not ready")
+        message("  VID ", vid, ": no cal_sky_renorm in staging — not ready")
         all_clear = FALSE; next
       }
       short_files = renorm_files[grepl(
@@ -2443,7 +2450,7 @@ do_cleanup = function(input_args){
         ))
       }
       if(wisp_done){
-        message("  VID ", vid, ": wisp-corrected cal_sky_renorm confirmed on disk")
+        message("  VID ", vid, ": SCI_ORIG confirmed in staging")
       } else {
         message("  VID ", vid, ": SCI_ORIG missing — wisp not fully propagated, retaining RAM work dir")
         all_clear = FALSE
@@ -2451,7 +2458,14 @@ do_cleanup = function(input_args){
     }
 
     if(all_clear){
-      message("All VIDs confirmed. Wiping ", ram_work_dir)
+      ## Copy cal_sky_renorm from staging to persistent disk location
+      message("All VIDs confirmed. Copying cal_sky_renorm -> ", cal_sky_renorm_persistent_dir)
+      dir.create(cal_sky_renorm_persistent_dir, recursive = TRUE, showWarnings = FALSE)
+      to_copy = list.files(cal_sky_renorm_dir, pattern = "\\.fits$", full.names = TRUE)
+      n_copied = sum(file.copy(to_copy, cal_sky_renorm_persistent_dir, overwrite = TRUE))
+      message(sprintf("  Copied %d / %d files to disk", n_copied, length(to_copy)))
+      ## Now wipe the entire RAM work dir
+      message("Wiping ", ram_work_dir)
       if(dir.exists(ram_work_dir)) unlink(ram_work_dir, recursive = TRUE)
       message("RAM work dir wiped — cleanup complete.")
     } else {
@@ -2460,6 +2474,7 @@ do_cleanup = function(input_args){
     return(invisible(NULL))
   }
   ## ── end RAM mode cleanup branch ──
+
 
 
   ref_dir            = input_args$ref_dir
