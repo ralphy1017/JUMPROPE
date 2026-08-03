@@ -136,6 +136,39 @@ zork = function(){
   invar_dir = paste0(ref_dir, "/InVar_Stacks/")
   median_dir = paste0(ref_dir, "/Median_Stacks/")
   patch_dir = paste0(ref_dir, "/Patch_Stacks/")
+
+  ## ── RAM mode: redirect intermediates to /dev/shm, keep cal_sky_renorm on disk ──
+  ## Works for 7-digit obs IDs (1176211) and 10-digit visit IDs (1176211001).
+  ## Safety ceiling: total RAM usage must not exceed 675 GB (of 751 GB).
+  ram_mode = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
+  if(ram_mode){
+    mem_lines    = readLines("/proc/meminfo")
+    mem_total_kb = as.numeric(gsub("[^0-9]", "", mem_lines[grep("^MemTotal",     mem_lines)[1]]))
+    mem_avail_kb = as.numeric(gsub("[^0-9]", "", mem_lines[grep("^MemAvailable", mem_lines)[1]]))
+    mem_used_gb  = (mem_total_kb - mem_avail_kb) / 1048576
+    message(sprintf("RAM MODE check: %.1f GB used / 751 GB total (ceiling 675 GB)", mem_used_gb))
+    if(mem_used_gb > 675){
+      message(sprintf("  %.1f GB exceeds 675 GB ceiling — falling back to disk mode", mem_used_gb))
+      ram_mode = FALSE
+    }
+  }
+  if(ram_mode){
+    ram_work_dir = "/dev/shm/jumprope_work"
+    message(paste0("  Intermediates -> ", ram_work_dir))
+    message(paste0("  cal_sky_renorm (final products) -> ", cal_sky_renorm_dir))
+    cal_sky_info_save_dir = paste0(ram_work_dir, "/Pro1oF/")
+    Pro1oF_dir            = paste0(ram_work_dir, "/Pro1oF/cal/")
+    cal_sky_dir           = paste0(ram_work_dir, "/Pro1oF/cal_sky/")
+    sky_pro_dir           = paste0(ram_work_dir, "/sky_pro/")
+    sky_frames_dir        = paste0(ram_work_dir, "/sky_pro/sky_frames/")
+    sky_super_dir         = paste0(ram_work_dir, "/sky_pro/sky_super/")
+    dump_dir              = paste0(ram_work_dir, "/dump/")
+    invar_dir             = paste0(ram_work_dir, "/InVar_Stacks/")
+    median_dir            = paste0(ram_work_dir, "/Median_Stacks/")
+    patch_dir             = paste0(ram_work_dir, "/Patch_Stacks/")
+    ## cal_sky_renorm_dir intentionally NOT overridden — stays on persistent ref_dir
+  }
+
   
   raw_files = load_raw_files(dir_raw = dir_raw)
   

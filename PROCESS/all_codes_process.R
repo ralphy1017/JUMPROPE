@@ -2388,6 +2388,80 @@ do_cleanup = function(input_args){
     return(invisible(NULL))
   }
 
+  ## ── RAM mode cleanup: verify cal_sky_renorm on disk, then wipe /dev/shm work dir ──
+  do_ram_mode  = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
+  ram_work_dir = "/dev/shm/jumprope_work"
+
+  if(do_ram_mode){
+    message("RAM mode cleanup: verifying cal_sky_renorm at ", cal_sky_renorm_dir)
+
+    ## VID pattern matches both 7-digit obs IDs and 10-digit visit IDs embedded in med_ filenames
+    med_files = list.files(median_dir, pattern = "^med_[0-9]+_.*\\.fits$", full.names = FALSE)
+    if(length(med_files) == 0){
+      message("  No median stacks in RAM work dir (already cleaned or stacking not run)")
+      if(dir.exists(ram_work_dir)){
+        unlink(ram_work_dir, recursive = TRUE)
+        message("  Wiped ", ram_work_dir)
+      }
+      return(invisible(NULL))
+    }
+    all_vids = unique(gsub("^med_([0-9]+)_.*$", "\\1", med_files))
+    message("  VIDs in RAM: ", paste(all_vids, collapse = ", "))
+
+    additional_params = input_args$additional_params
+    do_claws          = isTRUE(additional_params$do_claws)
+    short_detectors   = if(do_claws){
+      c("nrca1","nrca2","nrca3","nrca4","nrcb1","nrcb2","nrcb3","nrcb4")
+    } else {
+      c("nrca3","nrca4","nrcb3","nrcb4")
+    }
+
+    all_clear = TRUE
+    for(vid in all_vids){
+      renorm_files = list.files(cal_sky_renorm_dir,
+                                pattern   = glob2rx(paste0("*", vid, "*.fits")),
+                                full.names = TRUE)
+      if(length(renorm_files) == 0){
+        message("  VID ", vid, ": no cal_sky_renorm on disk — not ready")
+        all_clear = FALSE; next
+      }
+      short_files = renorm_files[grepl(
+        paste0("_(", paste(short_detectors, collapse = "|"), ")_"), renorm_files
+      )]
+      if(length(short_files) == 0){
+        message("  VID ", vid, ": no short-wave renorm files (NIRISS/MIRI only?) — wisp check skipped")
+        wisp_done = TRUE
+      } else {
+        ## Sample one representative file per detector
+        sample_files = character(0)
+        for(det in short_detectors){
+          hits = short_files[grepl(paste0("_", det, "_"), short_files)]
+          if(length(hits) > 0) sample_files = c(sample_files, hits[1])
+        }
+        wisp_done = all(sapply(sample_files, function(f)
+          "SCI_ORIG" %in% na.omit(Rfits_extnames(f))
+        ))
+      }
+      if(wisp_done){
+        message("  VID ", vid, ": wisp-corrected cal_sky_renorm confirmed on disk")
+      } else {
+        message("  VID ", vid, ": SCI_ORIG missing — wisp not fully propagated, retaining RAM work dir")
+        all_clear = FALSE
+      }
+    }
+
+    if(all_clear){
+      message("All VIDs confirmed. Wiping ", ram_work_dir)
+      if(dir.exists(ram_work_dir)) unlink(ram_work_dir, recursive = TRUE)
+      message("RAM work dir wiped — cleanup complete.")
+    } else {
+      message("Some VIDs not ready. RAM work dir retained for re-run.")
+    }
+    return(invisible(NULL))
+  }
+  ## ── end RAM mode cleanup branch ──
+
+
   ref_dir            = input_args$ref_dir
   cal_sky_renorm_dir = input_args$cal_sky_renorm_dir
   cal_sky_dir        = input_args$cal_sky_dir

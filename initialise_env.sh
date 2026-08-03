@@ -25,7 +25,8 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-export JUMPROPE_CLEANUP=TRUE  # TRUE = auto-delete intermediates after each run when wisp-verified
+export JUMPROPE_CLEANUP=TRUE
+export JUMPROPE_RAM_MODE=FALSE  # TRUE = stage all intermediates to /dev/shm (ceiling 675GB)
 
 export JUMPROPE_DUMP_DIR=/dev/shm/jumprope_dump  # RAM disk — eliminates dump frame I/O bottleneck (751 GB available on omega)
 
