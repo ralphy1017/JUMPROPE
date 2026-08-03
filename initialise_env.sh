@@ -4,14 +4,14 @@ export JUMPROPE_CRDS_PATH='/Volumes/Expansion/crds'
 export JUMPROPE_CRDS_CONTEXT='jwst_1140.pmap'
 
 
-export JUMPROPE_REF_DIR='/data1/rzi/jumprope/skysurfir' ## I recommend you keep this commented. Only add when you are certain the directory structure has been made. The code will auto prompt you to create it on first run.
+export JUMPROPE_REF_DIR='/data7/rzi/PEARLSplus/jumprope' ## I recommend you keep this commented. Only add when you are certain the directory structure has been made. The code will auto prompt you to create it on first run.
 export JUMPROPE_RAW_DIR='/data7/rzi/PEARLSplus/nircam/cal'
 
 export JUMPROPE_do_NIRISS=F
 export JUMPROPE_do_MIRI=F
 
 export JUMPROPE_cores_pro=64 #Number of cores to use for 1/f, sky subtr, wisp rem
-export JUMPROPE_cores_stack=8 #Number of cores to use internally for propaneWarpStackInVar
+export JUMPROPE_cores_stack=16 #Number of cores to use internally for propaneWarpStackInVar
 export JUMPROPE_tasks_stack=4 #Number of stacking tasks to run
 
 
@@ -25,4 +25,6 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-export JUMPROPE_CLEANUP=FALSE  # TRUE = auto-delete intermediates after each run when wisp-verified
+export JUMPROPE_CLEANUP=TRUE  # TRUE = auto-delete intermediates after each run when wisp-verified
+
+export JUMPROPE_DUMP_DIR=/dev/shm/jumprope_dump  # RAM disk — eliminates dump frame I/O bottleneck (376 GB available on omega)
