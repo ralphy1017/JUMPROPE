@@ -1237,6 +1237,7 @@ do_gen_stack = function(input_args){
   magzero = input_args$magzero
   cores = input_args$cores_stack
   tasks = input_args$tasks_stack
+  effective_cores = ifelse(tasks > 1L, max(1L, floor(input_args$cores_pro / tasks)), input_args$cores_pro)  ## full budget when serial, divided when parallel
   
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = input_args$additional_params$parallel_type
@@ -1360,11 +1361,12 @@ do_gen_stack = function(input_args){
       unlink(list_residual_temp_files, recursive = T)
     }
     
-    if(is.null(parallel_type)){
-      registerDoParallel(cores = tasks)
-    }else{
-      cl <- makeCluster(spec = tasks, type = parallel_type, outfile = "")
+    if(tasks > 1L){
+      cl <- makeCluster(spec = tasks, type = parallel_type, outfile = "")  ## PSOCK outer for tasks>1
       registerDoParallel(cl)
+    }else{
+      cl <- NULL
+      registerDoSEQ()   ## serial when tasks=1; inner propane gets full cores_pro
     }
     
    dummy = foreach(i = lo_loop:hi_loop, .packages = c('Rwcs', 'Rfits', 'ProPane', 'ProFound', 'celestial'), .export = c("jwst_dq_do_not_use_mask"))%dopar%{
@@ -1550,7 +1552,7 @@ do_gen_stack = function(input_args){
             magzero_in = input_info$MAGZERO_FIX,
             magzero_out = magzero,
             keyvalues_out = temp_proj,
-            cores = cores, 
+            cores = effective_cores, 
             direction = 'backward',
             doclip = doclip,
             clip_tol = clip_tol,
@@ -1559,7 +1561,7 @@ do_gen_stack = function(input_args){
             keep_extreme_pix = FALSE,
             dump_frames = TRUE,
             dump_dir = dump_stub,
-            multitype="cluster" ## Just keep this default since this parallelisation occurs in the ProPane package (and the underlying C libraries)
+            multitype = ifelse(tasks > 1L, "fork", "cluster")  ## fork inside PSOCK outer avoids PSOCK-in-PSOCK deadlock
           )
           
           output_stack$image$keyvalues$CLIP_MIN = clip_tol[1]
@@ -1594,8 +1596,8 @@ do_gen_stack = function(input_args){
           median_stack = propaneStackWarpMed(dirlist = dump_stub,
                                              pattern = glob2rx('*image_warp*'), 
                                              keyvalues_out = output_stack$image$keyvalues, 
-                                             cores = cores,
-                                             multitype = "cluster")
+                                             cores = effective_cores,
+                                             multitype = ifelse(tasks > 1L, "fork", "cluster"))  ## fork inside PSOCK outer
           
           file.remove(temp_file)
           
@@ -1615,13 +1617,10 @@ do_gen_stack = function(input_args){
       }
      return(NULL)
     }
-   if(!is.null(parallel_type)){
+   if(!is.null(cl)){
      stopCluster(cl)
-     registerDoSEQ()
-   }else{
-     stopImplicitCluster()
-     registerDoSEQ()
    }
+   registerDoSEQ()
    gc()
   }
 }
@@ -1680,7 +1679,7 @@ do_wisp_rem = function(input_args){
       ref_files = list.files(
         median_dir, 
         pattern = glob2rx(paste0(
-          "*", mod_visit_grid$VISIT_ID[ii], "*", mod_visit_grid$MODULE[ii], "*", "short", "*.fits"
+          "*", mod_visit_grid$VISIT_ID[ii], "*", mod_visit_grid$MODULE[ii], "*", "long", "*.fits"
         )),
         full.names = T)
       ref_files = ref_files[!grepl("F150W2|F070W|F090W|F115W|F150W|F200W|F140M|F162M|F182M|F210M|F164N|F187N|F212N", ref_files)] ## Remove the short wavelength filters
@@ -1695,7 +1694,7 @@ do_wisp_rem = function(input_args){
           plot = FALSE, 
           cores = cores
         )$full ## Now do a frame finder to try and find long channel NOT in VIISITID (but could be in PROGRAM)
-        ref_files = ref_files[grepl("short.+fits$", ref_files)]
+        ref_files = ref_files[grepl("long.+fits$", ref_files)]
       }
       
       filter_long = c(

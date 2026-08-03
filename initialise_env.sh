@@ -11,10 +11,16 @@ export JUMPROPE_do_NIRISS=F
 export JUMPROPE_do_MIRI=F
 
 export JUMPROPE_cores_pro=64 #Number of cores to use for 1/f, sky subtr, wisp rem
-export JUMPROPE_cores_stack=1 #Number of cores to use internally for propaneWarpStackInVar
-export JUMPROPE_tasks_stack=32 #Number of stacking tasks to run
+export JUMPROPE_cores_stack=8 #Number of cores to use internally for propaneWarpStackInVar
+export JUMPROPE_tasks_stack=4 #Number of stacking tasks to run
 
 
 # e.g., If I have 20 cal files to process, I could set cores_pro = 5 and only do 4 lots of computations.
 # I could then set cores_stack = 10 and tasks_stack = 2 to stack two things at once while taking advantage of 10 cores for the WCS warping. 
 # cores_stack * tasks_stack < Number of Cores. Use detectCores() in R or other to check system resources. 
+
+# Disable BLAS/OMP background threads so fork() inside PSOCK stacking workers is safe
+# (multi-threaded R + fork = potential mutex deadlock in child processes)
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
