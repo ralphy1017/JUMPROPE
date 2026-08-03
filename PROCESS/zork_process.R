@@ -174,6 +174,13 @@ zork = function(){
     median_dir            = paste0(ram_work_dir, "/Median_Stacks/")
     patch_dir             = paste0(ram_work_dir, "/Patch_Stacks/")
     ## cal_sky_renorm_persistent_dir stays on disk — copied from RAM in do_cleanup
+    ## Create all RAM directories upfront so pipeline steps can write immediately
+    for(d in c(cal_sky_info_save_dir, Pro1oF_dir, cal_sky_dir, cal_sky_renorm_dir,
+               sky_pro_dir, sky_frames_dir, sky_super_dir, dump_dir,
+               invar_dir, median_dir, patch_dir)){
+      dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    }
+    message("  RAM directories created.")
   }
 
 
