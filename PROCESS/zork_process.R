@@ -90,6 +90,9 @@ zork = function(){
     q()
   }
   
+  last_input_args = NULL
+  ram_work_dir = NULL
+  
   additional_params_var = initialise_params()
   list2env(additional_params_var, .GlobalEnv)
   
@@ -138,12 +141,13 @@ zork = function(){
   patch_dir = paste0(ref_dir, "/Patch_Stacks/")
 
 
-  ## ── RAM mode: stage ALL intermediates + cal_sky_renorm to /dev/shm ──
+  ## ── RAM mode: stage only the highest-I/O Pro1oF products to /dev/shm ──
   ## On cleanup: SCI_ORIG verified in staging dir, cal_sky_renorm copied to
   ## ref_dir/Pro1oF/cal_sky_renorm/ on disk, then /dev/shm is wiped.
   ## Works for 7-digit obs IDs (1176211) and 10-digit visit IDs (1176211001).
   cal_sky_renorm_persistent_dir = cal_sky_renorm_dir   # always the on-disk final destination
   ram_mode = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
+  cleanup_flag = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_CLEANUP"))
   if(ram_mode){
     df_raw = tryCatch(system("df -k /dev/shm", intern=TRUE), error=function(e) character(0))
     shm_avail_gb = if(length(df_raw) >= 2){
@@ -160,34 +164,71 @@ zork = function(){
   }
   if(ram_mode){
     ram_work_dir          = "/dev/shm/jumprope_work"
-    message(paste0("  Staging all intermediates + cal_sky_renorm -> ", ram_work_dir))
+    message(paste0("  Staging Pro1oF intermediates + cal_sky_renorm -> ", ram_work_dir))
     message(paste0("  Final cal_sky_renorm (disk) -> ", cal_sky_renorm_persistent_dir))
     cal_sky_info_save_dir = paste0(ram_work_dir, "/Pro1oF/")
     Pro1oF_dir            = paste0(ram_work_dir, "/Pro1oF/cal/")
     cal_sky_dir           = paste0(ram_work_dir, "/Pro1oF/cal_sky/")
     cal_sky_renorm_dir    = paste0(ram_work_dir, "/Pro1oF/cal_sky_renorm/")
-    sky_pro_dir           = paste0(ram_work_dir, "/sky_pro/")
-    sky_frames_dir        = paste0(ram_work_dir, "/sky_pro/sky_frames/")
-    sky_super_dir         = paste0(ram_work_dir, "/sky_pro/sky_super/")
-    dump_dir              = paste0(ram_work_dir, "/dump/")
-    invar_dir             = paste0(ram_work_dir, "/InVar_Stacks/")
-    median_dir            = paste0(ram_work_dir, "/Median_Stacks/")
-    patch_dir             = paste0(ram_work_dir, "/Patch_Stacks/")
+    ## Keep stack prerequisites + outputs on disk; large FITS writes to tmpfs
+    ## remain unstable for some filters (for example 1208023 F182M NRCA_short).
+    sky_pro_dir           = paste0(ref_dir, "/sky_pro/")
+    sky_frames_dir        = paste0(ref_dir, "/sky_pro/sky_frames/")
+    sky_super_dir         = paste0(ref_dir, "/sky_pro/sky_super/")
+    ## dump_dir intentionally NOT staged to RAM — cfitsio inVar_warp writes
+    ## fail on tmpfs; dump files are small (~17MB each) and suit disk fine.
+    ## dump_dir already set to disk path above (ref_dir/dump/).
+    invar_dir             = paste0(ref_dir, "/InVar_Stacks/")
+    median_dir            = paste0(ref_dir, "/Median_Stacks/")
+    patch_dir             = paste0(ref_dir, "/Patch_Stacks/")
     ## cal_sky_renorm_persistent_dir stays on disk — copied from RAM in do_cleanup
-    ## Create all RAM directories upfront so pipeline steps can write immediately
+    ## Create RAM and disk directories upfront so pipeline steps can write immediately
     for(d in c(cal_sky_info_save_dir, Pro1oF_dir, cal_sky_dir, cal_sky_renorm_dir,
-               sky_pro_dir, sky_frames_dir, sky_super_dir, dump_dir,
+               sky_pro_dir, sky_frames_dir, sky_super_dir,
                invar_dir, median_dir, patch_dir)){
       dir.create(d, recursive = TRUE, showWarnings = FALSE)
     }
     message("  RAM directories created.")
+    message("  sky_pro / InVar_Stacks / Median_Stacks / Patch_Stacks stay on disk for FITS-write stability.")
+    ## Clean and create the disk dump_dir for this run
+    if(dir.exists(dump_dir)) unlink(dump_dir, recursive = TRUE)
+    dir.create(dump_dir, recursive = TRUE, showWarnings = FALSE)
+    message(paste0("  dump_dir (disk) -> ", dump_dir))
+    on.exit({
+      if(!is.null(last_input_args) && dir.exists(ram_work_dir)){
+        do_cleanup(last_input_args, force = TRUE)
+      }else if(!is.null(ram_work_dir) && dir.exists(ram_work_dir)){
+        unlink(ram_work_dir, recursive = TRUE)
+        message("Forced RAM cleanup complete: ", ram_work_dir)
+      }
+    }, add = TRUE)
   }
-
+  ensure_ram_mode_dirs = function(){
+    if(!ram_mode){
+      return(invisible(NULL))
+    }
+    for(d in c(cal_sky_info_save_dir, Pro1oF_dir, cal_sky_dir, cal_sky_renorm_dir,
+               sky_pro_dir, sky_frames_dir, sky_super_dir,
+               invar_dir, median_dir, patch_dir)){
+      dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    }
+    if(dir.exists(dump_dir)) unlink(dump_dir, recursive = TRUE)
+    dir.create(dump_dir, recursive = TRUE, showWarnings = FALSE)
+    invisible(NULL)
+  }
+  
 
   
   raw_files = load_raw_files(dir_raw = dir_raw)
   
   select_code = select_code_func()
+  selected_steps = sort(unique(select_code - 1L))
+  use_in_memory_pipeline = ram_mode &&
+    identical(selected_steps, c(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 11L))
+  artifact_store = if(use_in_memory_pipeline) new.env(parent = emptyenv()) else NULL
+  if(use_in_memory_pipeline){
+    message("RAM MODE full-run handoff enabled: reusing manifests, metadata, and super-sky artifacts in-process.")
+  }
 
   make_dir_temp_func = function(input_args){make_directory_structure()}
   code_organiser = list(
@@ -216,6 +257,7 @@ zork = function(){
   }
   
   for(VID in VID_list){
+    ensure_ram_mode_dirs()
     
     input_args = list(
       filelist = raw_files,
@@ -250,16 +292,22 @@ zork = function(){
       cores_pro = cores_pro,
       cores_stack = cores_stack,
       tasks_stack = tasks_stack,
+      use_in_memory_pipeline = use_in_memory_pipeline,
+      artifact_store = artifact_store,
       
       SIGMA_LO = NULL #keep blurring at wisp rem stage off by default
     )
     
+    last_input_args = input_args
     lapply(select_code,function(x){code_organiser[[x]](input_args)})
+    if(ram_mode && cleanup_flag){
+      message("Per-VID RAM cleanup for ", VID)
+      do_cleanup(last_input_args)
+    }
   }
-  cleanup_flag = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_CLEANUP"))
   if(cleanup_flag){
     message("JUMPROPE_CLEANUP=TRUE: running post-run cleanup sweep over all VIDs...")
-    do_cleanup(input_args)
+    do_cleanup(last_input_args)
   }
 }
 

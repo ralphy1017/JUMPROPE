@@ -4,6 +4,12 @@
 
 initialise_params = function(){
  
+  skip_completed_files_env = Sys.getenv("JUMPROPE_SKIP_COMPLETED_FILES")
+  skip_completed_files_default = FALSE
+  if(nzchar(skip_completed_files_env)){
+    skip_completed_files_default = grepl("^(T|TRUE|1)$", skip_completed_files_env, ignore.case = TRUE)
+  }
+ 
   ## Edit this:
 
   ## set up the keep_trend data
@@ -11,7 +17,7 @@ initialise_params = function(){
     ## Keep trend data determines the aggressiveness of the 1/f. If nothing in this data frame, then default 1/f proceeds. 
     ## Default should be good for most blank fields.
     
-    skip_completed_files = TRUE, ## Only process files (in any step) that do not exist in the specified directory
+    skip_completed_files = skip_completed_files_default, ## Only process files (in any step) that do not exist in the specified directory
     
     ## vlarge for big objects that fill frame e.g., VV191. Least aggressive 1/f.
     ID_vlarge = data.frame(

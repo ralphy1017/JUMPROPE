@@ -7,14 +7,11 @@ library(Cairo)
 
 args = commandArgs(trailingOnly = T)
 if(length(args)==0){
-  message("Specify VISIT ID")
+  message("Specify observation or visit ID list")
   VID = ""
   
 }else{VID = toString(args[1])}
 
-
-## edit this
-registerDoParallel(cores = 6)
 
 env_var = Sys.getenv(
   x = c('JUMPROPE_RAW_DIR', 
@@ -29,12 +26,29 @@ if(any(env_var == "")){
   q()
 }
 
-filelist_all = c(
-  list.files(env_var['JUMPROPE_RAW_DIR'] , 
-             recursive = TRUE, 
-             pattern = glob2rx(paste0("*", VID, "*.fits$")), 
-             full.names = TRUE)
-)
+ids = if(nzchar(VID)) unlist(strsplit(VID, "|", fixed = TRUE)) else ""
+ids = ids[nzchar(ids)]
+
+if(length(ids) == 0){
+  filelist_all = c(
+    list.files(env_var['JUMPROPE_RAW_DIR'],
+               recursive = TRUE,
+               pattern = glob2rx("*.fits$"),
+               full.names = TRUE)
+  )
+}else{
+  filelist_all = unique(unlist(lapply(ids, function(id){
+    list.files(env_var['JUMPROPE_RAW_DIR'],
+               recursive = TRUE,
+               pattern = glob2rx(paste0("*", id, "*.fits$")),
+               full.names = TRUE)
+  })))
+}
+
+cores = suppressWarnings(as.integer(env_var['JUMPROPE_cores_pro']))
+if(is.na(cores) || cores < 1L){
+  cores = 1L
+}
 
 if(VID != ""){
   scan_wisp_rem = Rfits_key_scan(filelist = filelist_all, keylist = c("FILTER", "PROGRAM"))
@@ -54,6 +68,8 @@ unique_visits = unique(info_wisp$VID)
 
 message("Reversing wisp correction on short wavelength detectors:")
 cat('Processing',dim(info_wisp)[1],'files\n')
+
+registerDoParallel(cores = min(cores, max(1L, dim(info_wisp)[1])))
 
 temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop", .packages = c("Rfits"))%dopar%{
   ## copy original data to directory where we keep the wisps
