@@ -4,14 +4,19 @@ export JUMPROPE_CRDS_PATH='/Volumes/Expansion/crds'
 export JUMPROPE_CRDS_CONTEXT='jwst_1140.pmap'
 
 
-export JUMPROPE_REF_DIR='/data7/rzi/PEARLSplus/jumprope' ## I recommend you keep this commented. Only add when you are certain the directory structure has been made. The code will auto prompt you to create it on first run.
+export JUMPROPE_REF_DIR='/home/rzi/jumprope/pearl_stage' ## SSD staging root for PEARLSplus
 export JUMPROPE_RAW_DIR='/data7/rzi/PEARLSplus/nircam/cal'
+export JUMPROPE_FINAL_CAL_DIR='/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal'
+export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR='/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm'
+export JUMPROPE_STAGING_MODE=TRUE
+export JUMPROPE_SKIP_COMPLETED_FILES=TRUE
+export JUMPROPE_RUN_NAME='PEARLSplus_prod'
 
 export JUMPROPE_do_NIRISS=F
 export JUMPROPE_do_MIRI=F
 
-export JUMPROPE_cores_pro=64 #Number of cores to use for 1/f, sky subtr, wisp rem
-export JUMPROPE_cores_stack=16 #Number of cores to use internally for propaneWarpStackInVar
+export JUMPROPE_cores_pro=32 #Number of cores to use for 1/f, sky subtr, wisp rem
+export JUMPROPE_cores_stack=8 #Number of cores to use internally for propaneWarpStackInVar
 export JUMPROPE_tasks_stack=4 #Number of stacking tasks to run
 
 
@@ -26,13 +31,16 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 export JUMPROPE_CLEANUP=TRUE
-export JUMPROPE_RAM_MODE=FALSE  # TRUE = stage all intermediates to /dev/shm (ceiling 675GB)
+export JUMPROPE_RAM_MODE=FALSE  # Keep FALSE when using SSD staging mode in run_all_process.R
 
-export JUMPROPE_DUMP_DIR=/dev/shm/jumprope_dump  # RAM disk — eliminates dump frame I/O bottleneck (751 GB available on omega)
+export JUMPROPE_DUMP_DIR=/data7/rzi/PEARLSplus/jumprope/dump  # disk path — cfitsio inVar_warp writes fail on tmpfs
+export JUMPROPE_WISP_SIGMA_LO=2
+export JUMPROPE_STAGE_MULTIPLIER=5.0
+export JUMPROPE_MIN_SSD_FREE_GIB=500
 
 # Stage cal_sky_renorm to RAM before stacking: run "source stage_to_ram.sh" first,
 # then uncomment this line. Eliminates source-file I/O during propaneStackWarpInVar.
 # export JUMPROPE_CAL_SKY_RENORM_DIR=/dev/shm/jumprope_cal_sky_renorm
 
 # With both dump + input in /dev/shm, stacking is CPU-bound -- raise tasks_stack:
-# export JUMPROPE_tasks_stack=8   # 8 jobs x 8 cores each when fully RAM-bound
+# export JUMPROPE_tasks_stack=4   # 8 jobs x 8 cores each when fully RAM-bound

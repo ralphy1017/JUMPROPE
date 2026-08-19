@@ -202,7 +202,13 @@ main = function(){
       use_in_memory_pipeline = use_in_memory_pipeline,
       artifact_store = artifact_store,
   
-      SIGMA_LO = NULL #keep blurring at wisp rem stage off by default
+      SIGMA_LO = jp_env_numeric("JUMPROPE_WISP_SIGMA_LO", 2) # validated production default for wisp template low-frequency smoothing
+    )
+
+    jp_write_runtime_manifest(
+      ref_dir = ref_dir,
+      input_args = input_args,
+      run_name = Sys.getenv("JUMPROPE_RUN_NAME")
     )
 
     if(jp_store_enabled(input_args)){
@@ -234,7 +240,7 @@ main = function(){
     }
    
     if(length(args) <= 1 & !input_args$do_NIRISS){
-      input_args$FILT = "F277W|F356W|F444W|F250M|F300M|F335M|F360M|F410M|F430M|F460M|F480M|F323N|F405N|F466N|F470N" ## Process long wavelengths first
+        input_args$FILT = "F277W|F322W2|F356W|F444W|F250M|F300M|F335M|F360M|F410M|F430M|F460M|F480M|F323N|F405N|F466N|F470N" ## Process long wavelengths first
 
     }
 

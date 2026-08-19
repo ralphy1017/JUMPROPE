@@ -102,6 +102,46 @@ jp_stage_marker_path = function(ref_dir){
   file.path(ref_dir, ".jumprope_session_meta")
 }
 
+jp_runtime_manifest_path = function(ref_dir){
+  file.path(ref_dir, ".jumprope_run_manifest")
+}
+
+jp_find_repo_root = function(start = getwd()){
+  current = normalizePath(start, winslash = "/", mustWork = FALSE)
+  seen = character(0)
+  while(nzchar(current) && !(current %in% seen)){
+    if(dir.exists(file.path(current, ".git"))){
+      return(current)
+    }
+    seen = c(seen, current)
+    parent = dirname(current)
+    if(identical(parent, current)){
+      break
+    }
+    current = parent
+  }
+  ""
+}
+
+jp_git_state = function(repo_root = jp_find_repo_root()){
+  if(!nzchar(repo_root) || !dir.exists(repo_root)){
+    return(list(repo_root = "", head = "", dirty = NA))
+  }
+  head = tryCatch(
+    system2("git", c("-C", repo_root, "rev-parse", "HEAD"), stdout = TRUE, stderr = FALSE),
+    error = function(e) character(0)
+  )
+  dirty_status = tryCatch(
+    system2("git", c("-C", repo_root, "status", "--porcelain"), stdout = TRUE, stderr = FALSE),
+    error = function(e) character(0)
+  )
+  list(
+    repo_root = repo_root,
+    head = if(length(head) >= 1) head[[1]] else "",
+    dirty = length(dirty_status) > 0
+  )
+}
+
 jp_write_stage_marker = function(ref_dir, run_name = "", raw_dir = "", final_dir = ""){
   dir.create(ref_dir, recursive = TRUE, showWarnings = FALSE)
   marker = jp_stage_marker_path(ref_dir)
@@ -114,6 +154,45 @@ jp_write_stage_marker = function(ref_dir, run_name = "", raw_dir = "", final_dir
   )
   writeLines(marker_data, marker, useBytes = TRUE)
   invisible(marker)
+}
+
+jp_write_runtime_manifest = function(ref_dir, input_args, run_name = ""){
+  dir.create(ref_dir, recursive = TRUE, showWarnings = FALSE)
+  git_state = jp_git_state()
+  additional_params = input_args$additional_params
+  manifest = c(
+    paste0("written=", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    paste0("pid=", Sys.getpid()),
+    paste0("run_name=", run_name),
+    paste0("repo_root=", git_state$repo_root),
+    paste0("git_head=", git_state$head),
+    paste0("git_dirty=", git_state$dirty),
+    paste0("raw_dir=", input_args$raw_dir),
+    paste0("ref_dir=", input_args$ref_dir),
+    paste0("final_cal_dir=", ifelse(is.null(input_args$pro1of_cal_persistent_dir), "", input_args$pro1of_cal_persistent_dir)),
+    paste0("final_cal_sky_renorm_dir=", ifelse(is.null(input_args$cal_sky_renorm_persistent_dir), "", input_args$cal_sky_renorm_persistent_dir)),
+    paste0("VID=", input_args$VID),
+    paste0("FILT=", input_args$FILT),
+    paste0("cores_pro=", input_args$cores_pro),
+    paste0("cores_stack=", input_args$cores_stack),
+    paste0("tasks_stack=", input_args$tasks_stack),
+    paste0("parallel_type=", additional_params$parallel_type),
+    paste0("skip_completed_files=", additional_params$skip_completed_files),
+    paste0("ram_mode=", jp_truthy(Sys.getenv("JUMPROPE_RAM_MODE"))),
+    paste0("staging_mode=", jp_truthy(Sys.getenv("JUMPROPE_STAGING_MODE"))),
+    paste0("JUMPROPE_WISP_SIGMA_LO=", Sys.getenv("JUMPROPE_WISP_SIGMA_LO")),
+    paste0("SIGMA_LO=", ifelse(is.null(input_args$SIGMA_LO), "NULL", input_args$SIGMA_LO))
+  )
+  manifest_path = jp_runtime_manifest_path(ref_dir)
+  writeLines(manifest, manifest_path, useBytes = TRUE)
+  message("Run manifest: ", manifest_path)
+  message(
+    "Runtime state: git_head=", git_state$head,
+    " git_dirty=", git_state$dirty,
+    " SIGMA_LO=", ifelse(is.null(input_args$SIGMA_LO), "NULL", input_args$SIGMA_LO),
+    " skip_completed_files=", additional_params$skip_completed_files
+  )
+  invisible(manifest_path)
 }
 
 jp_stage_owner_pid = function(ref_dir){
@@ -2661,7 +2740,7 @@ do_wisp_rem = function(input_args){
   worker_cores = jp_cap_task_cores(cores = cores, ntasks = dim(info_wisp)[1])
   cl <- register_jumprope_backend(cores = worker_cores, parallel_type = parallel_type)
   
-  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"), .export = c("wispFixer", "jp_process_wisp_file"))%dopar%{
+  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"), .export = c("jp_env_numeric", "wispFixer", "jp_process_wisp_file"))%dopar%{
     jp_process_wisp_file(
       ii = ii,
       info_wisp = info_wisp,
@@ -3044,7 +3123,7 @@ wispFixer = function(wisp_im, ref_im,
                      sky_threshold=0.5, #Safe threshold to find the correct sky level
                      clip_threshold=0.997, #We avoid very bright pixels in the wisp template
                      sigma_hi=2,
-                     sigma_lo=20,
+                     sigma_lo=2,
                      poly=NULL,
                      cores=1){
   
@@ -3204,7 +3283,7 @@ do_help = function(input_args){
       cores_stack = cores_stack, ## <-- Cores for stacking with ProPane, numeric
       tasks_stack = tasks_stack, ## <-- Cores for parallel stacking jobs, numeric
   
-      SIGMA_LO = NULL #keep blurring at wisp rem stage off by default, otherwise numeric, standard deviation of Gaussian kernel to blur derived wisp template
+      SIGMA_LO = jp_env_numeric("JUMPROPE_WISP_SIGMA_LO", 2) # validated production default for low-frequency wisp smoothing
     )'
   )
   
