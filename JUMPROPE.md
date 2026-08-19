@@ -1,117 +1,217 @@
-# JUMPROPE Operating And Revision Guide
+# JUMPROPE Stable Architecture And Operations Guide
 
-This file is synchronized with [`AGENTS.md`](/data7/rzi/PEARLSplus/JUMPROPE/AGENTS.md) and documents the current stable working state of JUMPROPE as of Saturday, August 8, 2026.
+This file documents the current stable working state of JUMPROPE as of Wednesday, August 19, 2026.
 
-It is written for future coding agents and operators who need to understand how JUMPROPE currently works, what was changed recently, and what must not be broken.
+It is the repo-native handoff for future agents and operators who need to know:
 
-## Named Runs
-
-- `PEARLSplus`
-  - raw input tree:
-    - `/data7/rzi/PEARLSplus/nircam/cal`
-  - historical supervised output tree:
-    - `/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm`
-  - historical supervisor:
-    - `PROCESS/run_all_until_done.sh`
-
-- `SKYSURFIR`
-  - raw input tree:
-    - `/data4/rzi/NIRCAM/cal`
-  - final output tree:
-    - `/data5/rzi/JUMPROPE_SKYSURFIR/Pro1oF/cal_sky_renorm`
-  - staging root:
-    - `/home/rzi/jumprope/tmp_skysurfir`
-  - target observation list:
-    - [`PROCESS/skysurfir_obs_20260808.txt`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/skysurfir_obs_20260808.txt)
-  - supervisor:
-    - [`PROCESS/run_obs_until_done.sh`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_obs_until_done.sh)
+- how the stable version is structured
+- what changed from the original workflow
+- what failure modes were already diagnosed
+- how to configure large PEARLSplus and SKYSURFIR production runs
+- what must not be casually changed
 
 ## Scope
 
-Primary user goal:
-- Produce calibrated, sky-subtracted, pedestal-corrected, and wisp-removed `cal_sky_renorm` FITS products.
-- Durable science products are the files under `Pro1oF/cal_sky_renorm`.
-- Intermediate stacks, dump frames, sky frames, `cal`, `cal_sky`, `InVar_Stacks`, and `Median_Stacks` are expendable once final `cal_sky_renorm` files are verified and promoted.
+Primary science goal:
 
-Engineering goal:
-- Keep JUMPROPE as functionally close as possible to the original pipeline.
-- Improve stability first.
-- Use RAM and SSD staging opportunistically, but do not break Rfits / ProPane / ProFound workflows just to reduce I/O.
-- Avoid refactors that assume the pipeline can become fully object-native without FITS I/O.
+- Produce fully processed JWST exposure products in:
+  - `Pro1oF/cal`
+  - `Pro1oF/cal_sky_renorm`
+- `cal` is needed for calibrated, non-sky-subtracted science use.
+- `cal_sky_renorm` is needed for sky-subtracted, pedestal-corrected, wisp-removed science use and mosaic input.
 
-## Current Stable Run Modes
+Primary engineering goal:
 
-There are two practical entrypoints:
+- Keep JUMPROPE close to the original code path.
+- Stabilize it for large databases.
+- Use RAM and SSD staging opportunistically.
+- Do not break the FITS-centric workflow required by Rfits / ProPane / ProFound.
+
+## Stable Entry Points
+
+There are two real execution modes.
 
 1. `PROCESS/run_all_process.R`
-- Preferred for full long-wave + wisp + short-wave processing.
-- This is the most stable path for producing properly wisp-removed `cal_sky_renorm`.
-- It explicitly runs long-wave preprocessing first, then `do_wisp_rem()`, then reruns the short-wave branch.
+
+- Preferred for final science production.
+- This is the stable path for real wisp removal.
+- It does:
+  - long-wave preprocessing first
+  - `do_wisp_rem()`
+  - raw reload
+  - short-wave rerun
+- This ordering is essential.
 
 2. `PROCESS/zork_process.R`
-- Still supports explicit step execution.
-- Keep it literal: if the user passes steps `1,2,3,4,5,6,7,8,11`, it should do those steps and not silently append extra processing.
+
+- Keep this literal and step-driven.
+- If the user passes steps `1,2,3,4,5,6,7,8,11`, it should do exactly those steps.
+- Do not silently append extra work to mimic `run_all_process.R`.
 
 Operational rule:
-- If the user wants final wisp-removed products with the fewest ambiguities, prefer `run_all_process.R`.
-- If the user wants exact manual control over steps, use `zork_process.R`.
 
-## Current Environment And Runtime Defaults
+- Use `run_all_process.R` for durable wisp-removed products.
+- Use `zork_process.R` only when explicit manual step control matters more than convenience.
 
-These values are currently set in [`initialise_env.sh`](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.sh):
+## What Actually Made Wisp Removal Work
+
+This was the central debugging result.
+
+The successful behavior was not just a parameter tweak. The stable solution required all of the following:
+
+1. Correct orchestration
+
+- Long-wave data must be processed first.
+- Wisp removal must run after long-wave stacks exist.
+- The short-wave branch must then be rerun so the wisp correction propagates into final products.
+
+2. Stable short-grid long-wave references
+
+- The corrected code path uses the short-grid reference stacks for short-wave correction.
+- Earlier broken behavior could select or infer the wrong reference context and leave wisps effectively uncorrected.
+
+3. Stable defaults
+
+- `JUMPROPE_WISP_SIGMA_LO=2` is the validated production default in this stable version.
+- This value was empirically verified on the PEARLSplus `2514` observations where wisp removal was visually confirmed.
+
+4. Diagnostics preserved in products
+
+- The pipeline preserves key extensions and metadata that let us verify what happened:
+  - `SCI_ORIG`
+  - `REF_WISP_WARP`
+  - `WISP_TEMPLATE`
+
+Practical rule:
+
+- If wisps appear to persist, first verify that the run used `run_all_process.R`, the stable code path, and `JUMPROPE_WISP_SIGMA_LO=2`.
+
+## Stable Production Defaults
+
+Validated defaults for large production campaigns:
 
 ```sh
-export JUMPROPE_REF_DIR='/home/rzi/jumprope/tmp'
-export JUMPROPE_RAW_DIR='/data4/rzi/NIRCAM/cal'
-export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR='/data5/rzi/JUMPROPE/Pro1oF/cal_sky_renorm'
-export JUMPROPE_STAGING_MODE=TRUE
-
-export JUMPROPE_cores_pro=64
+export JUMPROPE_cores_pro=32
 export JUMPROPE_cores_stack=8
-export JUMPROPE_tasks_stack=8
+export JUMPROPE_tasks_stack=4
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
+export JUMPROPE_STAGING_MODE=TRUE
 export JUMPROPE_CLEANUP=TRUE
 export JUMPROPE_RAM_MODE=FALSE
-export JUMPROPE_DUMP_DIR=/data7/rzi/PEARLSplus/jumprope/dump
+
+export JUMPROPE_WISP_SIGMA_LO=2
+export JUMPROPE_STAGE_MULTIPLIER=5.0
+export JUMPROPE_MIN_SSD_FREE_GIB=500
 ```
 
-Important interpretation:
-- `JUMPROPE_REF_DIR` is currently being used as an SSD staging base, not the final archive.
-- `JUMPROPE_FINAL_CAL_SKY_RENORM_DIR` is the durable output destination for promoted final products.
-- `JUMPROPE_STAGING_MODE=TRUE` means `run_all_process.R` creates a fresh per-run session root under a sibling `tmp_sessions` directory and promotes completed outputs at cleanup time.
-- `JUMPROPE_RAM_MODE=FALSE` is intentional in this stable version. SSD staging is the preferred stability path. Pure tmpfs RAM mode caused FITS and cfitsio failure modes.
-- `JUMPROPE_DUMP_DIR` remains disk-backed because ProPane / cfitsio dump-frame writes were unstable on tmpfs.
+Interpretation:
 
-These values are currently set in [`PROCESS/initialise_variables.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/initialise_variables.R):
+- `32` cores per database is the stable large-run setting.
+- `tasks_stack=4` and `cores_stack=8` keep stacking parallel enough without reviving the old failure modes.
+- BLAS/OMP/MKL threads stay pinned to `1` because the stable model uses explicit parallel workers and nested threaded math caused instability.
+- `RAM_MODE=FALSE` is intentional. Production uses SSD staging, not full tmpfs mode.
 
-```r
-skip_completed_files = FALSE
-ow_large = TRUE
-do_claws = TRUE
-parallel_type = 'PSOCK'
-```
+## Repo-Native Campaign Templates
 
-Important interpretation:
-- `skip_completed_files = FALSE` means a normal run rebuilds each requested VID from scratch.
-- If the user wants resume behavior, this variable must be changed to `TRUE`, or the code path must explicitly skip complete VIDs.
-- `parallel_type = 'PSOCK'` is part of the stability fix set. Do not switch back to forked stacking casually.
+The repo now contains stable campaign env templates:
 
-## Directory Model
+- [initialise_env.pearlsplus.sh](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.pearlsplus.sh)
+- [initialise_env.skysurfir.sh](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.skysurfir.sh)
 
-Current working pattern:
+These are templates for the two major databases.
 
-- Staging root:
-  - `/home/rzi/jumprope/tmp`
-- Per-run session root:
-  - `/home/rzi/jumprope/tmp_sessions/run_<VID>_<PID>_<timestamp>`
-- Durable final products:
-  - `/data5/rzi/JUMPROPE/Pro1oF/cal_sky_renorm`
+### PEARLSplus template
 
-Within a staging run, JUMPROPE expects:
+- raw input:
+  - `/data7/rzi/PEARLSplus/nircam/cal`
+- staging root:
+  - `/home/rzi/jumprope/pearl_stage`
+- final outputs:
+  - `/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal`
+  - `/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm`
+- target manifest:
+  - [PROCESS/pearlsplus_obs_20260813.txt](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/pearlsplus_obs_20260813.txt)
+- QA PNG output:
+  - `/data7/rzi/PEARLSplus/png/live_qc_nrcb34`
+
+### SKYSURFIR template
+
+- raw input:
+  - `/data4/rzi/NIRCAM/cal`
+- staging root:
+  - `/home/rzi/jumprope/skysurfir_stage`
+- final outputs:
+  - `/data5/rzi/jumprope-skysurfir/Pro1oF/cal`
+  - `/data5/rzi/jumprope-skysurfir/Pro1oF/cal_sky_renorm`
+- target manifest:
+  - [PROCESS/skysurfir_obs_20260808.txt](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/skysurfir_obs_20260808.txt)
+- QA PNG output:
+  - `/data5/rzi/jumprope-skysurfir/png_qc_nrcb34`
+- overlap avoidance:
+  - `JUMPROPE_SHARED_SKIP_CAL_DIR=/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal`
+  - `JUMPROPE_SHARED_SKIP_RENORM_DIR=/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm`
+
+Practical rule:
+
+- Keep `initialise_env.sh` as the active local config.
+- Keep the two template files as durable repo-native references.
+
+## Observation Manifests
+
+Stable large-run manifests are stored in:
+
+- [PROCESS/pearlsplus_obs_20260813.txt](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/pearlsplus_obs_20260813.txt)
+- [PROCESS/skysurfir_obs_20260808.txt](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/skysurfir_obs_20260808.txt)
+
+These are intended for automated restartable supervisors, not just ad hoc manual runs.
+
+## Current Supervisor Model
+
+The stable production supervisor is:
+
+- [PROCESS/run_obs_until_done.sh](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_obs_until_done.sh)
+
+This script is part of the stable architecture, not just a convenience wrapper.
+
+Key behavior:
+
+- sources `initialise_env.sh`
+- preserves caller overrides after sourcing
+- normalizes observation-ID manifests
+- computes completeness by comparing raw `_cal.fits` counts to final promoted outputs
+- launches `run_all_process.R` repeatedly until the requested observation-ID set is complete
+- holds a per-run lock file to avoid duplicate supervisors
+- renders QA PNGs for completed observations if configured
+- stops after repeated no-progress passes instead of looping forever
+
+## Staging Strategy
+
+The stable production model is hybrid SSD staging, not true all-RAM execution.
+
+What is stable:
+
+- active run products staged on SSD
+- selective in-memory reuse of some R objects
+- final promotion into durable output directories only after completeness checks
+
+What is not stable enough to call production:
+
+- forcing all intermediates onto `/dev/shm`
+- treating all FITS artifacts as temporary in-memory objects only
+- moving ProPane / cfitsio dump products to tmpfs
+
+Practical rule:
+
+- Use RAM where the code already safely supports it.
+- Do not redesign around the assumption that JUMPROPE can run without intermediate FITS files. It cannot yet.
+
+## Current Directory Model
+
+For a staging run, JUMPROPE expects:
 
 ```text
 <ref_dir>/
@@ -128,307 +228,206 @@ Within a staging run, JUMPROPE expects:
   dump/
 ```
 
-Durable product:
-- `Pro1oF/cal_sky_renorm`
+Product meaning:
 
-Usually disposable after verification:
 - `Pro1oF/cal`
-- `Pro1oF/cal_sky`
-- `sky_pro/sky_frames`
-- `sky_pro/sky_super`
+  - calibrated products used for non-sky-subtracted science and background analysis
+- `Pro1oF/cal_sky_renorm`
+  - calibrated, sky-subtracted, pedestal-corrected, wisp-removed products used for mosaics and general science
+
+Disposable after successful promotion:
+
+- `sky_pro`
 - `InVar_Stacks`
 - `Median_Stacks`
 - `Patch_Stacks`
 - `dump`
+- staged `Pro1oF/cal`
+- staged `Pro1oF/cal_sky`
+- staged `Pro1oF/cal_sky_renorm`
 
-## Current Pipeline Logic
+## Structural Changes That Were Kept
 
-### `run_all_process.R`
+### 1. Isolated session roots
 
-[`PROCESS/run_all_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_all_process.R) is the main stable orchestration layer.
+Implemented in [PROCESS/run_all_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_all_process.R).
 
-Key behavior:
-- Reads env vars for raw dir, ref dir, staging mode, final renorm dir, and core settings.
-- Creates isolated session directories when `JUMPROPE_STAGING_MODE=TRUE`.
-- Builds `input_args`.
-- Runs the main processing round:
-  - `do_1of`
-  - `do_cal_process`
-  - `do_regen_sky_info`
-  - `do_super_sky`
-  - `do_apply_super_sky`
-  - `do_modify_pedestal`
-  - `do_cal_sky_info`
-  - `do_gen_stack`
-- For NIRCam:
-  - processes long-wave filters first
-  - runs `do_wisp_rem()`
-  - reloads raw files
-  - reruns the processing round for short-wave filters
-- Runs `do_cleanup()` in staging mode.
+Stable behavior:
 
-This long-first, wisp, then short rerun is essential. It is the main reason `run_all_process.R` is more reliable than naïvely calling `zork_process.R` steps in sequence when the goal is true wisp propagation into final files.
+- each `run_all_process.R` call gets its own session root
+- cleanup only wipes that session root after promotion succeeds
 
-### `zork_process.R`
+Why it matters:
 
-[`PROCESS/zork_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/zork_process.R) remains step-driven.
-
-Keep this rule:
-- Do not make `zork_process.R` silently run extra steps beyond what stdin requested.
-
-Earlier experimentation suggested making `1,2,3,4,5,6,7,8,11` behave more like `run_all_process.R`. That was not kept as the stable policy.
-
-## Recent Structural Improvements
-
-### 1. Isolated staging session roots
-
-Implemented in [`PROCESS/run_all_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_all_process.R).
-
-Problem before:
-- multiple runs could share the same SSD staging root
-- cleanup from one run could erase another run’s active intermediates
-
-Stable fix:
-- each `run_all_process.R` invocation now creates its own session directory:
-  - `run_<VID>_<PID>_<timestamp>`
-- cleanup only wipes that session root after promotion and validation
+- one run can no longer erase another run's active staging products
 
 ### 2. Promotion-aware cleanup
 
-Implemented in [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R) via:
-- `jp_expected_renorm_state()`
-- `jp_cleanup_vid_intermediates()`
-- `do_cleanup()`
+Implemented in [PROCESS/all_codes_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R).
 
 Stable behavior:
-- cleanup does not blindly delete intermediates
-- staged `cal_sky_renorm` outputs are checked for completeness
-- outputs are copied to `JUMPROPE_FINAL_CAL_SKY_RENORM_DIR`
-- only then are staging products removed
 
-For short-wave wisp-removed products, cleanup also checks for `SCI_ORIG` propagation where appropriate before removing related intermediates.
+- staged final products are validated before cleanup
+- outputs are promoted to final `cal` and `cal_sky_renorm` directories
+- intermediates are only removed after the promoted state is complete
 
-### 3. Safe FITS copy/write wrappers
+Why it matters:
 
-Implemented in [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R):
-- `copy_fits_with_validation()`
-- `fits_write_pix_with_retry()`
+- this prevents cleanup from turning partial runs into silent data loss
 
-### 4. Partial in-memory artifact store
+### 3. Retry-safe FITS writes
 
-Implemented in [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R):
-- `jp_store_enabled()`
-- `jp_store_set()`
-- `jp_store_get()`
-- `jp_store_list_set()`
-
-Purpose:
-- allow some pipeline stages to reuse in-memory objects when `use_in_memory_pipeline` is enabled
-- avoid unnecessary rereads where practical
-
-Important limitation:
-- this is partial only
-- JUMPROPE is still fundamentally FITS-centric
-- ProPane / Rfits / ProFound still require on-disk FITS at critical points
-
-## Critical Stability Patches By Function
-
-### `do_gen_stack()`
-
-File:
-- [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R)
-
-Stable changes kept here:
-- PSOCK remains the preferred stable parallel backend
-- image lists are kept in R memory rather than round-tripped through temporary FITS list files
-- InVar stack write happens before median-stack computation
-- `propaneStackWarpMed()` was constrained to avoid unsafe concurrent cfitsio handle behavior inside outer PSOCK tasks
-- dump frames remain on disk rather than tmpfs because tmpfs FITS writes proved unstable
-
-Practical rule:
-- do not reintroduce temp `temp_list_*.fits` staging inside stack generation
-- do not move dump-frame FITS output to `/dev/shm` unless cfitsio behavior is revalidated carefully
-
-### `do_wisp_rem()`
-
-File:
-- [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R)
-
-Stable changes kept here:
-- missing long-wave reference stacks are now guarded before `propaneFrameFinder()` / `Rfits_key_scan()` are called
-- invalid or `NA` reference filenames are filtered out
-- missing long overlap no longer hard-crashes the run with:
-  - `Assertion on 'filename' failed: 'NA' not readable.`
-
-Observed behavior now:
-- short-only or no-overlap cases log messages such as:
-  - `No overlapping long wavelength for wisp correction`
-  - `No long wavelength - skipping...`
-- the run can continue instead of aborting
-
-Important caveat:
-- some no-overlap cases still produced sequential retry messages like:
-  - `subscript out of bounds`
-- the pipeline sometimes continued and still produced outputs
-- this means the crash was fixed, but scientific correctness for those no-overlap wisp cases still needs independent verification
-
-### `do_super_sky()`
-
-Stable change:
-- ensures `dirname(file_super_sky)` exists before writing
-
-### `do_apply_super_sky()`
-
-Stable change:
-- if `sky_info.csv` is absent for a VID/filter combination, the function now skips cleanly rather than crashing
-
-### `do_modify_pedestal()`
+Implemented in [PROCESS/all_codes_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R).
 
 Stable behavior:
-- uses validated FITS copies and retry-safe writes into `cal_sky_renorm`
-- is part of the final product path and should not be bypassed casually
 
-## Current Staging And Resume Semantics
+- key FITS write paths use validation and retry wrappers
 
-### Full rebuild mode
+Why it matters:
 
-Current default in `initialise_variables.R`:
-- `skip_completed_files = FALSE`
+- transient FITS I/O failures were a recurring crash source
 
-Meaning:
-- each requested VID is reset and rebuilt from the raw inputs
-- staging intermediates for that VID are removed first
-- in staging mode, final promoted outputs for that VID can also be removed before rebuild
+### 4. Partial in-memory store
 
-### Resume mode
+Implemented in [PROCESS/all_codes_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R).
 
-When `skip_completed_files = TRUE`:
-- `run_all_process.R` checks final promoted outputs using `jp_expected_renorm_state()`
-- fully complete VIDs are skipped
-- incomplete VIDs continue processing
+Stable behavior:
 
-Practical rule:
-- if the user says "start where it left off", set or confirm `skip_completed_files = TRUE`
-- if the user says "rebuild from scratch", set or confirm `skip_completed_files = FALSE`
+- selected objects can be reused in memory where safe
 
-## RAM Mode Versus SSD Staging
+Why it matters:
 
-The stable version is not "full RAM mode". It is hybrid.
+- it cuts avoidable rereads without pretending the whole pipeline is object-native
 
-What worked:
-- SSD staging of the active run under `/home/rzi/jumprope/tmp_sessions/...`
-- optional in-memory object reuse for selected internal objects
+## Critical Failure Modes Already Diagnosed
 
-What did not prove stable enough:
-- aggressive tmpfs use for all intermediate FITS outputs
-- dump-frame FITS writes on `/dev/shm`
-- assuming all stack inputs/outputs could stay purely in memory while still satisfying ProPane / Rfits expectations
+### Stack-generation crashes
+
+Main fixes kept in `do_gen_stack()`:
+
+- use `PSOCK`
+- avoid round-tripping image lists through temporary FITS list files
+- write InVar stacks before median stacks
+- keep dump frames on disk
+- constrain `propaneStackWarpMed()` to avoid unsafe concurrent cfitsio handle usage
 
 Practical rule:
-- prefer SSD staging mode for production
-- treat `JUMPROPE_RAM_MODE` as experimental / partial
-- do not market the current pipeline as "all in RAM"
 
-## Self-Monitoring Supervisor Procedure
+- do not reintroduce `temp_list_*.fits` staging for stack inputs
+- do not move dump-frame FITS output to tmpfs without revalidation
 
-Use [`PROCESS/run_obs_until_done.sh`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_obs_until_done.sh) for named campaigns that should restart automatically until a fixed observation-ID set is complete.
+### Wisp-removal hard crashes on missing long-wave overlap
 
-The script:
-- works at the observation-ID level
-- compares raw `_cal.fits` counts against final `_cal_Pro1oF_sky_rem.fits` counts
-- loops until all requested observations are complete
-- preserves caller-supplied env overrides after sourcing `initialise_env.sh`
+Main fixes kept in `do_wisp_rem()`:
 
-Important operational rule:
-- if `run_all_process.R` is a child of `run_obs_until_done.sh` or `run_all_until_done.sh`, killing only `run_all_process.R` will not stop the run permanently
-- kill the supervisor shell as well if the user wants the run stopped
-
-## Why Wisp Removal Previously Looked Wrong
-
-Key point:
-- running stack generation plus wisp removal is not enough if the pipeline does not then propagate the correction into the final short-wave `cal_sky_renorm` branch correctly
-- `run_all_process.R` handles this by:
-  - long-wave processing
-  - wisp removal
-  - short-wave rerun
-
-Earlier user observations of persistent wisps were partly due to:
-- using `zork_process.R` step sequences that did not reproduce the full `run_all_process.R` ordering
-- crashy stack/wisp paths
-- some no-overlap cases where wisp correction could not be cleanly derived
+- guard missing long-wave references before `propaneFrameFinder()` and `Rfits_key_scan()`
+- filter invalid and `NA` filenames
 
 Practical rule:
-- if the scientific goal is truly wisp-removed `cal_sky_renorm`, use `run_all_process.R` unless there is a very specific reason not to
 
-## Monitoring Guidance
+- a non-crashing no-overlap case is not the same as a scientifically good correction
 
-Low-cost monitoring is preferred.
+### Directory-creation failures
 
-Useful checks:
+Main fix kept in `do_super_sky()`:
+
+- ensure parent directories exist before writing
+
+### Partial sky-info cases
+
+Main fix kept in `do_apply_super_sky()`:
+
+- skip cleanly if `sky_info.csv` is absent for a specific VID or filter context
+
+## Why Earlier Runs Looked Wrong
+
+Several things were previously conflated.
+
+1. Wrong entrypoint
+
+- Step-driven `zork_process.R` runs were sometimes treated as equivalent to full `run_all_process.R`.
+- They are not equivalent for reliable wisp propagation.
+
+2. Old parameter defaults
+
+- Stable production now assumes `JUMPROPE_WISP_SIGMA_LO=2`.
+- Earlier values could leave obvious structured residuals.
+
+3. Broken or stale before/after checks
+
+- A valid before/after comparison must use the true raw input-side `cal` file as the before image, not a file that JUMPROPE already rewrote.
+
+4. Mixed or compromised output trees
+
+- If final output trees contain results from earlier unstable runs, visual QA becomes ambiguous.
+- Clean rebuilds or carefully resumed runs are required.
+
+## Monitoring And QA
+
+Low-cost monitoring commands:
 
 ```sh
 ps -o pid,etime,%cpu,%mem,cmd -p <MASTER_PID>
 tail -n 80 <logfile>
-find <final_cal_sky_renorm_dir> -type f -name '*.fits' | wc -l
+find <final_dir> -type f -name '*.fits' | wc -l
 ```
 
-For staging runs, also inspect the session root:
+The supervisor also supports automatic QA PNG generation for completed observations through:
+
+- [PROCESS/make_obs_png_samples.py](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/make_obs_png_samples.py)
+
+Current QA convention:
+
+- `20` random files per completed observation
+- `nrcb3|nrcb4` by default
+
+## Practical Launch Pattern
+
+Large runs should be launched from `PROCESS/` with the correct active `initialise_env.sh`.
+
+PEARLSplus:
 
 ```sh
-find /home/rzi/jumprope/tmp_sessions/run_<...>/Pro1oF/cal -type f | wc -l
-find /home/rzi/jumprope/tmp_sessions/run_<...>/Pro1oF/cal_sky_renorm -type f | wc -l
+cd /data7/rzi/PEARLSplus/JUMPROPE/PROCESS
+bash ./run_obs_until_done.sh 2>&1 | tee ../logs/PEARLSplus/nohup.log
 ```
 
-Interpretation:
-- no new final files does not necessarily mean the run is dead
-- JUMPROPE often spends long periods building staging intermediates before promotion
+SKYSURFIR:
 
-## PNG Inspection Helper
+```sh
+cd /data5/rzi/JUMPROPE/PROCESS
+bash ./run_obs_until_done.sh 2>&1 | tee ../logs/SKYSURFIR/nohup.log
+```
 
-New helper script:
-- [`PROCESS/make_random_png_samples.py`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/make_random_png_samples.py)
+If the user wants resume behavior:
 
-Purpose:
-- generate asinh-stretched PNG inspection images from final `cal_sky_renorm` FITS files
-- currently filters to:
-  - `nrca1`
-  - `nrca2`
-  - `nrcb1`
-  - `nrcb2`
+- keep `JUMPROPE_SKIP_COMPLETED_FILES=TRUE`
 
-## Files Most Important To Future Agents
+If the user wants a full rebuild:
 
-Start here:
-- [`initialise_env.sh`](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.sh)
-- [`PROCESS/initialise_variables.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/initialise_variables.R)
-- [`PROCESS/run_all_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_all_process.R)
-- [`PROCESS/zork_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/zork_process.R)
-- [`PROCESS/all_codes_process.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R)
-- [`PROCESS/make_random_png_samples.py`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/make_random_png_samples.py)
-- [`AGENTS.md`](/data7/rzi/PEARLSplus/JUMPROPE/AGENTS.md)
+- change `JUMPROPE_SKIP_COMPLETED_FILES=FALSE`
+
+## Files Future Agents Should Read First
+
+- [initialise_env.sh](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.sh)
+- [initialise_env.pearlsplus.sh](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.pearlsplus.sh)
+- [initialise_env.skysurfir.sh](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.skysurfir.sh)
+- [PROCESS/initialise_variables.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/initialise_variables.R)
+- [PROCESS/run_all_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_all_process.R)
+- [PROCESS/run_obs_until_done.sh](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/run_obs_until_done.sh)
+- [PROCESS/all_codes_process.R](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/all_codes_process.R)
+- [PROCESS/make_obs_png_samples.py](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/make_obs_png_samples.py)
+- [AGENTS.md](/data7/rzi/PEARLSplus/JUMPROPE/AGENTS.md)
 
 ## Rules For Future Revisions
 
-1. Do not break `run_all_process.R` long-wave -> wisp -> short-wave ordering.
-2. Do not silently make `zork_process.R` run extra steps.
-3. Do not remove isolated staging session roots.
-4. Do not delete staging outputs until final promoted `cal_sky_renorm` files are verified.
-5. Do not move dump-frame FITS I/O to tmpfs without revalidating cfitsio stability.
-6. Do not assume "RAM mode" means "no FITS I/O".
-7. Treat no-overlap wisp cases as scientifically suspect until visually verified.
-8. Prefer PSOCK over more aggressive fork-heavy parallel layouts.
-9. Keep BLAS/OMP/MKL thread counts pinned to `1` when using the current parallel model.
-10. When the user asks to resume, verify `skip_completed_files` semantics before launching.
-
-## Recommended First Actions For A New Agent
-
-1. Read `initialise_env.sh`.
-2. Read `PROCESS/initialise_variables.R`.
-3. Confirm whether the user wants:
-   - rebuild from scratch
-   - resume and skip complete outputs
-4. Confirm whether the user wants:
-   - `run_all_process.R`
-   - `zork_process.R`
-5. Inspect current staging and final output directories before editing cleanup logic.
-6. If changing stack or wisp logic, test on one problematic VID first before launching a large batch.
+1. Do not break long-wave first -> wisp removal -> short-wave rerun ordering.
+2. Do not make `zork_process.R` silently execute extra steps.
+3. Do not remove isolated session roots.
+4. Do not delete staging products before promoted outputs are verified.
+5. Do not move dump-frame FITS output to tmpfs without fresh validation.
+6. Do not describe the current system as fully RAM-native.
+7. Prefer `PSOCK` over more aggressive fork-heavy models.
+8. Keep BLAS/OMP/MKL thread counts pinned to `1` in the current stable parallel model.
+9. Preserve `JUMPROPE_WISP_SIGMA_LO=2` as the stable default unless new validation disproves it.
+10. When comparing before and after wisp removal, use true raw input `cal` files as the before image.
