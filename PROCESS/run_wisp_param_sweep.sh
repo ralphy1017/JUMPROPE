@@ -8,8 +8,6 @@ CORES_PRO="${JUMPROPE_cores_pro:-32}"
 CORES_STACK="${JUMPROPE_cores_stack:-8}"
 TASKS_STACK="${JUMPROPE_tasks_stack:-4}"
 
-FILTERS='F070W|F090W|F115W|F140M|F150W|F162M|F182M|F200W|F210M|F250M|F277W|F300M|F323N|F335M|F356W|F360M|F405N|F410M|F430M|F444W|F460M|F466N|F470N|F480M'
-
 mkdir -p "${BASE_DIR}"
 
 run_variant() {
@@ -17,6 +15,7 @@ run_variant() {
   local run_dir="${BASE_DIR}/${variant}"
   local log_file="${BASE_DIR}/${variant}.log"
   local png_dir="${run_dir}/png"
+  local triptych_input_dir="${run_dir}/triptych_inputs"
 
   mkdir -p "${run_dir}"
 
@@ -46,14 +45,14 @@ run_variant() {
   unset JUMPROPE_WISP_SIGMA_LO
 
   case "${variant}" in
-    scale_threshold_0975)
-      export JUMPROPE_WISP_SCALE_THRESHOLD=0.975
+    clip_threshold_099)
+      export JUMPROPE_WISP_CLIP_THRESHOLD=0.99
       ;;
-    clip_threshold_0999)
-      export JUMPROPE_WISP_CLIP_THRESHOLD=0.999
+    sigma_lo_10)
+      export JUMPROPE_WISP_SIGMA_LO=10
       ;;
-    sigma_hi_1)
-      export JUMPROPE_WISP_SIGMA_HI=1
+    scale_threshold_095)
+      export JUMPROPE_WISP_SCALE_THRESHOLD=0.95
       ;;
     *)
       echo "Unknown variant: ${variant}" >&2
@@ -63,18 +62,20 @@ run_variant() {
 
   Rscript run_all_process.R "${OBS_ID}" > "${log_file}" 2>&1
 
-  python3 make_before_after_filter_pngs.py \
-    --raw-dir "${RAW_DIR}" \
-    --processed-dir "${run_dir}/Pro1oF/cal_sky_renorm" \
+  rm -rf "${triptych_input_dir}"
+  mkdir -p "${triptych_input_dir}"
+  find "${run_dir}/Pro1oF/cal_sky_renorm" -maxdepth 1 -type f \
+    \( -name "jw*_nrcb3_cal_Pro1oF_sky_rem.fits" -o -name "jw*_nrcb4_cal_Pro1oF_sky_rem.fits" \) \
+    -exec ln -sf {} "${triptych_input_dir}/" \; >> "${log_file}" 2>&1 || true
+
+  python3 make_wisp_triptych_pngs.py \
+    --processed-dir "${triptych_input_dir}" \
     --output-dir "${png_dir}" \
-    --filters "${FILTERS}" \
-    --before-label "Before: raw cal" \
-    --after-label "After: ${variant}" \
     --overwrite >> "${log_file}" 2>&1
 }
 
-run_variant scale_threshold_0975
-run_variant clip_threshold_0999
-run_variant sigma_hi_1
+run_variant clip_threshold_099
+run_variant sigma_lo_10
+run_variant scale_threshold_095
 
 printf '%s\n' "${BASE_DIR}"

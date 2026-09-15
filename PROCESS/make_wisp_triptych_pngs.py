@@ -2,7 +2,9 @@
 
 import argparse
 import os
+import random
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-jumprope")
 
@@ -24,9 +26,31 @@ def parse_args():
     )
     parser.add_argument("--processed-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--prefix", default="")
+    parser.add_argument("--obs-ids", default="")
+    parser.add_argument("--detectors", default="nrca3|nrca4|nrcb3|nrcb4")
     parser.add_argument("--filters", default="")
+    parser.add_argument("--per-obs", type=int, default=0, help="Deterministically sample up to N files per observation ID. 0 means all.")
+    parser.add_argument("--seed", type=int, default=8675309)
+    parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
+
+
+def filename_detector(path: Path):
+    lower = path.name.lower()
+    for detector in sorted(SHORT_DETECTORS, key=len, reverse=True):
+        token = detector.lower()
+        if f"_{token}_" in lower:
+            return detector
+    return None
+
+
+def filename_obs_id(path: Path):
+    parts = path.name.split("_", 1)
+    if parts and len(parts[0]) >= 10:
+        return parts[0][-10:-3]
+    return ""
 
 
 def read_triptych_inputs(path: Path):
@@ -125,33 +149,104 @@ def render_triptych(path: Path, output_png: Path):
     plt.close(fig)
 
 
+def process_triptych(path_str: str, output_png_str: str, filters: tuple[str, ...]):
+    path = Path(path_str)
+    output_png = Path(output_png_str)
+    try:
+        filt, detector, _, _, _ = read_triptych_inputs(path)
+        if filters and filt not in filters:
+            return ("skipped", path.name, "filter")
+        if detector not in SHORT_DETECTORS:
+            return ("skipped", path.name, "detector")
+        render_triptych(path, output_png)
+        return ("written", path.name, "")
+    except RuntimeError as exc:
+        if "Missing required wisp HDU/header" in str(exc):
+            return ("skipped", path.name, "missing_hdu")
+        return ("error", path.name, str(exc))
+    except Exception as exc:
+        return ("error", path.name, str(exc))
+
+
 def main():
     args = parse_args()
     processed_dir = Path(args.processed_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     filters = {item.strip().upper() for item in args.filters.split("|") if item.strip()}
+    detectors = {item.strip().upper() for item in args.detectors.split("|") if item.strip()}
+    obs_ids = {item.strip() for item in args.obs_ids.split("|") if item.strip()}
+    prefix = args.prefix.strip()
 
     written = 0
     skipped = 0
     errors = 0
 
+    jobs = max(1, int(args.jobs))
+    work_items = []
+
+    candidates = []
     for path in sorted(processed_dir.glob("*.fits")):
-        output_png = output_dir / f"{path.stem}__wisp_triptych.png"
+        obs_id = filename_obs_id(path)
+        if obs_ids and obs_id not in obs_ids:
+            continue
+        file_detector = filename_detector(path)
+        if file_detector is None:
+            skipped += 1
+            continue
+        if detectors and file_detector not in detectors:
+            skipped += 1
+            continue
+        candidates.append((obs_id, path))
+
+    if args.per_obs > 0:
+        grouped = {}
+        for obs_id, path in candidates:
+            grouped.setdefault(obs_id, []).append(path)
+        sampled = []
+        for obs_id in sorted(grouped):
+            rng = random.Random(f"{args.seed}:{obs_id}")
+            obs_paths = grouped[obs_id]
+            if len(obs_paths) > args.per_obs:
+                obs_paths = sorted(rng.sample(obs_paths, args.per_obs))
+            sampled.extend(obs_paths)
+        candidates = [("", path) for path in sorted(sampled)]
+
+    for _, path in candidates:
+        png_name = f"{path.stem}__wisp_triptych.png"
+        if prefix:
+            png_name = f"{prefix}__{png_name}"
+        output_png = output_dir / png_name
         if output_png.exists() and not args.overwrite:
             skipped += 1
             continue
-        try:
-            filt, detector, _, _, _ = read_triptych_inputs(path)
-            if filters and filt not in filters:
-                continue
-            if detector not in SHORT_DETECTORS:
-                continue
-            render_triptych(path, output_png)
-            written += 1
-        except Exception as exc:
-            errors += 1
-            print(f"ERROR {path.name}: {exc}", flush=True)
+        work_items.append((str(path), str(output_png)))
+
+    if jobs == 1:
+        for path_str, output_png_str in work_items:
+            status, path_name, detail = process_triptych(path_str, output_png_str, tuple(filters))
+            if status == "written":
+                written += 1
+            elif status == "skipped":
+                skipped += 1
+            else:
+                errors += 1
+                print(f"ERROR {path_name}: {detail}", flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as executor:
+            futures = [
+                executor.submit(process_triptych, path_str, output_png_str, tuple(filters))
+                for path_str, output_png_str in work_items
+            ]
+            for future in futures:
+                status, path_name, detail = future.result()
+                if status == "written":
+                    written += 1
+                elif status == "skipped":
+                    skipped += 1
+                else:
+                    errors += 1
+                    print(f"ERROR {path_name}: {detail}", flush=True)
 
     print(f"written={written} skipped={skipped} errors={errors} output_dir={output_dir}", flush=True)
 

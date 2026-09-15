@@ -72,8 +72,9 @@ The successful behavior was not just a parameter tweak. The stable solution requ
 
 3. Stable defaults
 
-- `JUMPROPE_WISP_SIGMA_LO=2` is the validated production default in this stable version.
-- This value was empirically verified on the PEARLSplus `2514` observations where wisp removal was visually confirmed.
+- `JUMPROPE_WISP_SIGMA_LO=5` and `JUMPROPE_WISP_CLIP_THRESHOLD=0.975` are the validated production defaults in this stable version.
+- These values were empirically revalidated on Wednesday, August 19, 2026 using PEARLSplus observations including `1180025`, `2514093`, `2514095`, and `2514132`.
+- Earlier defaults were too conservative for some faint and diffuse wisps and could leave too much low-frequency structure behind.
 
 4. Diagnostics preserved in products
 
@@ -84,7 +85,7 @@ The successful behavior was not just a parameter tweak. The stable solution requ
 
 Practical rule:
 
-- If wisps appear to persist, first verify that the run used `run_all_process.R`, the stable code path, and `JUMPROPE_WISP_SIGMA_LO=2`.
+- If wisps appear to persist, first verify that the run used `run_all_process.R`, the stable code path, `JUMPROPE_WISP_SIGMA_LO=5`, and `JUMPROPE_WISP_CLIP_THRESHOLD=0.975`.
 
 ## Stable Production Defaults
 
@@ -103,7 +104,8 @@ export JUMPROPE_STAGING_MODE=TRUE
 export JUMPROPE_CLEANUP=TRUE
 export JUMPROPE_RAM_MODE=FALSE
 
-export JUMPROPE_WISP_SIGMA_LO=2
+export JUMPROPE_WISP_SIGMA_LO=5
+export JUMPROPE_WISP_CLIP_THRESHOLD=0.975
 export JUMPROPE_STAGE_MULTIPLIER=5.0
 export JUMPROPE_MIN_SSD_FREE_GIB=500
 ```
@@ -350,7 +352,7 @@ Several things were previously conflated.
 
 2. Old parameter defaults
 
-- Stable production now assumes `JUMPROPE_WISP_SIGMA_LO=2`.
+- Stable production now assumes `JUMPROPE_WISP_SIGMA_LO=5` with `JUMPROPE_WISP_CLIP_THRESHOLD=0.975`.
 - Earlier values could leave obvious structured residuals.
 
 3. Broken or stale before/after checks
@@ -429,5 +431,5 @@ If the user wants a full rebuild:
 6. Do not describe the current system as fully RAM-native.
 7. Prefer `PSOCK` over more aggressive fork-heavy models.
 8. Keep BLAS/OMP/MKL thread counts pinned to `1` in the current stable parallel model.
-9. Preserve `JUMPROPE_WISP_SIGMA_LO=2` as the stable default unless new validation disproves it.
+9. Preserve `JUMPROPE_WISP_SIGMA_LO=5` and `JUMPROPE_WISP_CLIP_THRESHOLD=0.975` as the stable defaults unless new validation disproves them.
 10. When comparing before and after wisp removal, use true raw input `cal` files as the before image.

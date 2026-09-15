@@ -22,9 +22,36 @@ jwst_read_cal_core = function(filename){
 }
 
 jwst_read_sky_masks = function(filename){
+  sky_im = tryCatch(
+    Rfits_read_image(filename, ext="SKY", header=FALSE),
+    error = function(e) NULL
+  )
+  sky_dim = if(is.array(sky_im)) dim(sky_im) else NULL
+  read_mask = function(extname){
+    tryCatch(
+      Rfits_read_image(filename, ext=extname),
+      error = function(e) NULL
+    )
+  }
+  make_zero_mask = function(){
+    if(is.null(sky_dim)){
+      stop("Cannot infer sky-mask dimensions for ", filename)
+    }
+    Rfits_create_image(matrix(0, nrow = sky_dim[1], ncol = sky_dim[2]), keyvalues = list())
+  }
+  pixelmask = read_mask("PIXELMASK")
+  objectmask = read_mask("OBJECTMASK")
+  if(is.null(pixelmask)){
+    message("Missing PIXELMASK in ", basename(filename), "; using zero pixel mask")
+    pixelmask = make_zero_mask()
+  }
+  if(is.null(objectmask)){
+    message("Missing OBJECTMASK in ", basename(filename), "; using zero object mask")
+    objectmask = make_zero_mask()
+  }
   output = list(
-    PIXELMASK = Rfits_read_image(filename, ext="PIXELMASK"),
-    OBJECTMASK = Rfits_read_image(filename, ext="OBJECTMASK")
+    PIXELMASK = pixelmask,
+    OBJECTMASK = objectmask
   )
   class(output) = "Rfits_list"
   attributes(output)$filename = filename
@@ -96,6 +123,32 @@ jp_prepare_ref_dir = function(ref_dir){
   dir.create(file.path(ref_dir, "Median_Stacks"), recursive = TRUE, showWarnings = FALSE)
   dir.create(file.path(ref_dir, "Patch_Stacks"), recursive = TRUE, showWarnings = FALSE)
   invisible(ref_dir)
+}
+
+jp_remove_tree = function(path, attempts = 3L, wait_seconds = 1){
+  if(is.null(path) || !nzchar(path) || !file.exists(path)){
+    return(invisible(TRUE))
+  }
+
+  for(attempt in seq_len(attempts)){
+    suppressWarnings(unlink(path, recursive = TRUE, force = TRUE))
+    if(!file.exists(path)){
+      return(invisible(TRUE))
+    }
+
+    rm_status = tryCatch(
+      system2("rm", c("-rf", "--", path), stdout = FALSE, stderr = FALSE),
+      error = function(e) 1L
+    )
+    if(identical(rm_status, 0L) && !file.exists(path)){
+      return(invisible(TRUE))
+    }
+
+    gc()
+    Sys.sleep(wait_seconds * attempt)
+  }
+
+  stop("Failed to remove directory tree: ", path)
 }
 
 jp_stage_marker_path = function(ref_dir){
@@ -245,7 +298,7 @@ jp_reap_stale_stage_sessions = function(session_root, current_ref_dir = "", stal
       next
     }
 
-    unlink(session_dir, recursive = TRUE)
+    jp_remove_tree(session_dir)
     message("Reaped stale staging session: ", session_dir)
   }
 
@@ -254,7 +307,7 @@ jp_reap_stale_stage_sessions = function(session_root, current_ref_dir = "", stal
 
 jp_reset_ref_dir = function(ref_dir){
   if(dir.exists(ref_dir)){
-    unlink(ref_dir, recursive = TRUE)
+    jp_remove_tree(ref_dir)
   }
   jp_prepare_ref_dir(ref_dir)
 }
@@ -633,6 +686,12 @@ load_files = function(input_args, which_module, sky_info = NULL){
     pid_idx = scan_1oF$VISIT_ID %in% corr_pid
     
     files_wisp = scan_1oF$full[pid_idx]
+    staged_wisp = file.path(
+      Pro1oF_dir,
+      paste0(sub("\\.fits$", "", basename(files_wisp), ignore.case = TRUE), "_Pro1oF.fits")
+    )
+    staged_ok = file.exists(staged_wisp) & file.access(staged_wisp, 6) == 0
+    files_wisp[staged_ok] = staged_wisp[staged_ok]
     return(files_wisp)
   }
   
@@ -685,11 +744,14 @@ stop_jumprope_backend = function(cl){
 }
 
 jp_cap_write_cores = function(cores, nfiles){
+  if(nfiles >= 512L){
+    return(min(cores, 1L))
+  }
   if(nfiles >= 128L){
-    return(min(cores, 8L))
+    return(min(cores, 2L))
   }
   if(nfiles >= 64L){
-    return(min(cores, 16L))
+    return(min(cores, 4L))
   }
   cores
 }
@@ -717,18 +779,42 @@ copy_with_retry = function(from, to, overwrite = TRUE, attempts = 3L, wait_secon
   stop("Failed to copy ", from, " -> ", to, " after ", attempts, " attempts")
 }
 
-copy_fits_with_validation = function(from, to, overwrite = TRUE, attempts = 3L, wait_seconds = 1, required_ext = "SCI"){
+copy_fits_with_validation = function(from, to, overwrite = TRUE, attempts = 5L, wait_seconds = 1, required_ext = "SCI"){
   dir.create(dirname(to), recursive = TRUE, showWarnings = FALSE)
-  tmp_to = paste0(to, ".tmpcopy.", Sys.getpid())
+  tmp_to = paste0(to, ".tmpcopy.", Sys.getpid(), ".", sample.int(.Machine$integer.max, 1))
   last_error = NULL
   on.exit(unlink(tmp_to), add = TRUE)
   
   for(attempt in seq_len(attempts)){
     unlink(tmp_to)
     ok = tryCatch({
-      copied = file.copy(from, tmp_to, overwrite = overwrite)
+      source_size = file.info(from)$size
+      if(is.na(source_size) || source_size <= 0){
+        stop("source file is missing or empty")
+      }
+      cp_error = character(0)
+      cp_status = tryCatch(
+        system2("cp", c("-f", "--", from, tmp_to), stdout = FALSE, stderr = TRUE),
+        warning = function(w){
+          cp_error <<- conditionMessage(w)
+          1L
+        },
+        error = function(e){
+          cp_error <<- conditionMessage(e)
+          1L
+        }
+      )
+      copied = identical(cp_status, 0L) || identical(cp_status, integer(0))
       if(!isTRUE(copied) || !file.exists(tmp_to) || file.info(tmp_to)$size <= 0){
-        stop("file.copy returned FALSE or produced an empty file")
+        unlink(tmp_to)
+        copied = tryCatch(file.copy(from, tmp_to, overwrite = overwrite), error = function(e) FALSE)
+        if(!isTRUE(copied) || !file.exists(tmp_to) || file.info(tmp_to)$size <= 0){
+          stop("copy failed via cp and file.copy", if(length(cp_error) > 0) paste0(": ", paste(cp_error, collapse = " | ")) else "")
+        }
+      }
+      copied_size = file.info(tmp_to)$size
+      if(is.na(copied_size) || copied_size != source_size){
+        stop("copy size mismatch: source=", source_size, " copied=", copied_size)
       }
       Rfits_nhdu(tmp_to)
       if(!is.null(required_ext)){
@@ -761,6 +847,21 @@ copy_fits_with_validation = function(from, to, overwrite = TRUE, attempts = 3L, 
   stop("Failed to copy/validate FITS ", from, " -> ", to, " after ", attempts, " attempts: ", conditionMessage(last_error))
 }
 
+jp_stack_median_proxy = function(output_stack, reason = "dump frame fallback"){
+  if(is.null(output_stack$image)){
+    stop("Cannot create median proxy: output_stack$image is missing")
+  }
+  proxy = list(image = output_stack$image)
+  proxy$image$keyvalues$EXTNAME = "image"
+  proxy$image$keyvalues$MEDPROXY = 1L
+  proxy$image$keyvalues$MEDWHY = substr(reason, 1, 60)
+  proxy$image$keynames = unique(names(proxy$image$keyvalues))
+  proxy$image$keycomments = rep(list(''), length(proxy$image$keynames))
+  names(proxy$image$keycomments) = proxy$image$keynames
+  class(proxy) = "Rfits_list"
+  proxy
+}
+
 jp_cleanup_vid_intermediates = function(root_dir, vid, remove_final_products = FALSE, remove_cal_products = TRUE, remove_cal_sky_products = TRUE){
   if(is.null(root_dir) || !nzchar(root_dir) || !dir.exists(root_dir) || is.null(vid) || !nzchar(vid)){
     return(invisible(NULL))
@@ -769,13 +870,13 @@ jp_cleanup_vid_intermediates = function(root_dir, vid, remove_final_products = F
   dump_dir = file.path(root_dir, "dump")
   dump_vid_dir = file.path(dump_dir, vid)
   if(dir.exists(dump_vid_dir)){
-    unlink(dump_vid_dir, recursive = TRUE)
+    jp_remove_tree(dump_vid_dir)
     message("  Removed ", dump_vid_dir)
   }
 
   flat_dump_vid_dir = file.path(root_dir, paste0("dump", vid))
   if(dir.exists(flat_dump_vid_dir)){
-    unlink(flat_dump_vid_dir, recursive = TRUE)
+    jp_remove_tree(flat_dump_vid_dir)
     message("  Removed ", flat_dump_vid_dir)
   }
 
@@ -839,6 +940,149 @@ jp_cleanup_vid_intermediates = function(root_dir, vid, remove_final_products = F
   if(length(del_sky_super) > 0){
     file.remove(del_sky_super)
     message("  Removed ", length(del_sky_super), " super sky files from ", sky_super_dir)
+  }
+
+  invisible(NULL)
+}
+
+jp_filter_match = function(paths, vid, filter_regex = ""){
+  if(length(paths) == 0){
+    return(character(0))
+  }
+  keep = grepl(vid, basename(paths), fixed = TRUE)
+  if(nzchar(filter_regex)){
+    keep = keep & grepl(filter_regex, basename(paths))
+  }
+  paths[keep]
+}
+
+jp_prune_stage_products = function(input_args,
+                                   filter_regex = "",
+                                   remove_cal_products = TRUE,
+                                   remove_cal_sky_products = TRUE,
+                                   remove_final_products = TRUE,
+                                   remove_sky_frames = TRUE,
+                                   remove_sky_super = FALSE,
+                                   remove_dump = TRUE){
+  root_dir = input_args$ref_dir
+  vid = input_args$VID
+  if(is.null(root_dir) || !nzchar(root_dir) || !dir.exists(root_dir) || is.null(vid) || !nzchar(vid)){
+    return(invisible(NULL))
+  }
+
+  if(isTRUE(remove_dump)){
+    dump_root = file.path(root_dir, "dump", vid)
+    if(dir.exists(dump_root)){
+      if(!nzchar(filter_regex)){
+        jp_remove_tree(dump_root)
+        message("  Removed staged dump tree ", dump_root)
+      }else{
+        dump_filters = list.dirs(dump_root, recursive = FALSE, full.names = TRUE)
+        dump_filters = dump_filters[grepl(filter_regex, basename(dump_filters))]
+        for(d in dump_filters){
+          jp_remove_tree(d)
+          message("  Removed staged dump filter dir ", d)
+        }
+      }
+    }
+  }
+
+  if(isTRUE(remove_cal_products)){
+    pro1of_cal_dir = file.path(root_dir, "Pro1oF", "cal")
+    del_cal = jp_filter_match(list.files(pro1of_cal_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+    if(length(del_cal) > 0){
+      file.remove(del_cal)
+      message("  Removed ", length(del_cal), " staged Pro1oF cal files from ", pro1of_cal_dir)
+    }
+  }
+
+  if(isTRUE(remove_cal_sky_products)){
+    pro1of_cal_sky_dir = file.path(root_dir, "Pro1oF", "cal_sky")
+    del_cal_sky = jp_filter_match(list.files(pro1of_cal_sky_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+    if(length(del_cal_sky) > 0){
+      file.remove(del_cal_sky)
+      message("  Removed ", length(del_cal_sky), " staged cal_sky files from ", pro1of_cal_sky_dir)
+    }
+  }
+
+  if(isTRUE(remove_final_products)){
+    pro1of_cal_sky_renorm_dir = file.path(root_dir, "Pro1oF", "cal_sky_renorm")
+    del_renorm = jp_filter_match(list.files(pro1of_cal_sky_renorm_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+    if(length(del_renorm) > 0){
+      file.remove(del_renorm)
+      message("  Removed ", length(del_renorm), " staged cal_sky_renorm files from ", pro1of_cal_sky_renorm_dir)
+    }
+  }
+
+  if(isTRUE(remove_sky_frames)){
+    sky_frames_dir = file.path(root_dir, "sky_pro", "sky_frames")
+    del_sky_frames = jp_filter_match(list.files(sky_frames_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+    if(length(del_sky_frames) > 0){
+      file.remove(del_sky_frames)
+      message("  Removed ", length(del_sky_frames), " staged sky frame files from ", sky_frames_dir)
+    }
+  }
+
+  if(isTRUE(remove_sky_super)){
+    sky_super_dir = file.path(root_dir, "sky_pro", "sky_super")
+    del_sky_super = list.files(sky_super_dir, pattern = "\\.fits$", full.names = TRUE)
+    if(length(del_sky_super) > 0 && nzchar(filter_regex)){
+      del_sky_super = del_sky_super[grepl(filter_regex, basename(del_sky_super))]
+    }
+    if(length(del_sky_super) > 0){
+      file.remove(del_sky_super)
+      message("  Removed ", length(del_sky_super), " staged super sky files from ", sky_super_dir)
+    }
+  }
+
+  invisible(NULL)
+}
+
+jp_promote_stage_products = function(input_args,
+                                     filter_regex = "",
+                                     promote_cal = TRUE,
+                                     promote_renorm = TRUE){
+  vid = input_args$VID
+  if(is.null(vid) || !nzchar(vid)){
+    return(invisible(NULL))
+  }
+
+  if(isTRUE(promote_cal)){
+    cal_dir = input_args$Pro1oF_dir
+    cal_persistent_dir = input_args$pro1of_cal_persistent_dir
+    if(!is.null(cal_persistent_dir) && nzchar(cal_persistent_dir) && dir.exists(cal_dir)){
+      dir.create(cal_persistent_dir, recursive = TRUE, showWarnings = FALSE)
+      cal_to_copy = jp_filter_match(list.files(cal_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+      if(length(cal_to_copy) > 0){
+        cal_targets = file.path(cal_persistent_dir, basename(cal_to_copy))
+        copied = vapply(seq_along(cal_to_copy), function(i){
+          copy_fits_with_validation(cal_to_copy[[i]], cal_targets[[i]], overwrite = TRUE, required_ext = "SCI")
+        }, logical(1))
+        message(sprintf(
+          "  Early promoted %d / %d Pro1oF cal files for VID %s",
+          sum(copied), length(copied), vid
+        ))
+      }
+    }
+  }
+
+  if(isTRUE(promote_renorm)){
+    renorm_dir = input_args$cal_sky_renorm_dir
+    renorm_persistent_dir = input_args$cal_sky_renorm_persistent_dir
+    if(!is.null(renorm_persistent_dir) && nzchar(renorm_persistent_dir) && dir.exists(renorm_dir)){
+      dir.create(renorm_persistent_dir, recursive = TRUE, showWarnings = FALSE)
+      renorm_to_copy = jp_filter_match(list.files(renorm_dir, pattern = "\\.fits$", full.names = TRUE), vid, filter_regex)
+      if(length(renorm_to_copy) > 0){
+        renorm_targets = file.path(renorm_persistent_dir, basename(renorm_to_copy))
+        copied = vapply(seq_along(renorm_to_copy), function(i){
+          copy_fits_with_validation(renorm_to_copy[[i]], renorm_targets[[i]], overwrite = TRUE, required_ext = "SCI")
+        }, logical(1))
+        message(sprintf(
+          "  Early promoted %d / %d cal_sky_renorm files for VID %s",
+          sum(copied), length(copied), vid
+        ))
+      }
+    }
   }
 
   invisible(NULL)
@@ -1402,25 +1646,30 @@ do_cal_process = function(input_args, filelist = NULL){
         redoskysize = pro_out$redoskysize
       
         sky_redo_func = function(x){
-          tryCatch(
-            {
-              sky_redo = profoundSkyPoly(x$image, objects=x$pro$objects_redo, degree=x$sky_poly_deg, quancut=0.99, mask=x$mask)
-              return(sky_redo)
-            },
+          sky_redo = tryCatch(
+            profoundSkyPoly(x$image, objects=x$pro$objects_redo, degree=x$sky_poly_deg, quancut=0.99, mask=x$mask),
             error = function(cond){
-              message("Adjusting object mask for polynomial skies")
-              sky_redo = profoundSkyPoly(x$image, objects=x$pro$objects, degree=x$sky_poly_deg, quancut=0.99, mask=x$mask)
-              return(sky_redo)
-            },
-            warning = function(cond){
-              message("Adjusting object mask for polynomial skies")
-              sky_redo = profoundSkyPoly(x$image, objects=x$pro$objects, degree=x$sky_poly_deg, quancut=0.99, mask=x$mask)
-              return(sky_redo)
-            },
-            finally = {
+              message("Adjusting object mask for polynomial skies: ", conditionMessage(cond))
               NULL
             }
           )
+          if(!is.null(sky_redo) && !is.null(sky_redo$sky)){
+            return(sky_redo)
+          }
+
+          sky_redo = tryCatch(
+            profoundSkyPoly(x$image, objects=x$pro$objects, degree=x$sky_poly_deg, quancut=0.99, mask=x$mask),
+            error = function(cond){
+              message("Polynomial sky fallback failed for ", basename, ": ", conditionMessage(cond))
+              NULL
+            }
+          )
+          if(!is.null(sky_redo) && !is.null(sky_redo$sky)){
+            return(sky_redo)
+          }
+
+          message("Using original ProFound sky fallback for ", basename)
+          list(sky = x$pro$sky)
         }
       
         if(do_MIRI){
@@ -1429,7 +1678,13 @@ do_cal_process = function(input_args, filelist = NULL){
           pro_redo = pro
         }else{
           sky_redo = sky_redo_func(list(image = JWST_cal_image$imDat, pro = pro, mask = JWST_cal_mask, sky_poly_deg = sky_poly_deg))
-          pro_redo = profoundProFound(JWST_cal_image$imDat, mask=JWST_cal_mask, skycut=2, pixcut=5, box=box, grid = box, redoskysize=redoskysize, sky=sky_redo$sky, redosky=FALSE, tolerance=Inf)
+          pro_redo = tryCatch(
+            profoundProFound(JWST_cal_image$imDat, mask=JWST_cal_mask, skycut=2, pixcut=5, box=box, grid = box, redoskysize=redoskysize, sky=sky_redo$sky, redosky=FALSE, tolerance=Inf),
+            error = function(cond){
+              message("Using original ProFound object/skyRMS fallback for ", basename, ": ", conditionMessage(cond))
+              pro
+            }
+          )
         }
       
         if(is.null(sky_redo$sky)){
@@ -1443,6 +1698,17 @@ do_cal_process = function(input_args, filelist = NULL){
       }
         if(is.null(pro_redo$objects_redo)){
         pro_redo$objects_redo = pro$objects_redo 
+      }
+        image_dim = dim(JWST_cal_image$imDat)
+        if(is.null(sky_redo$sky) || !is.array(sky_redo$sky) || !identical(dim(sky_redo$sky), image_dim)){
+        ## Last-resort fallback: keep the file processable rather than dropping a sky frame.
+        sky_redo$sky = matrix(0, nrow = image_dim[1], ncol = image_dim[2])
+      }
+        if(is.null(pro_redo$skyRMS) || !is.array(pro_redo$skyRMS) || !identical(dim(pro_redo$skyRMS), image_dim)){
+        pro_redo$skyRMS = matrix(1, nrow = image_dim[1], ncol = image_dim[2])
+      }
+        if(is.null(pro_redo$objects_redo) || !is.array(pro_redo$objects_redo) || !identical(dim(pro_redo$objects_redo), image_dim)){
+        pro_redo$objects_redo = matrix(0, nrow = image_dim[1], ncol = image_dim[2])
       }
       
         if(is.null(pro_redo$skyChiSq)){
@@ -1844,13 +2110,30 @@ do_apply_super_sky = function(input_args){
       file_super_sky = paste0(sky_super_dir,'/super_',temp_cal[[1]]$keyvalues$DETECTOR,'_',temp_cal[[1]]$keyvalues$FILTER,'.fits')
       super_sky = Rfits_read_image(file_super_sky, header=FALSE)
       
-      obj_idx = temp_sky$PIXELMASK$imDat==0 & temp_sky$OBJECTMASK$imDat==0
+      obj_idx = temp_sky$PIXELMASK$imDat==0 & temp_sky$OBJECTMASK$imDat==0 &
+        is.finite(temp_cal$SCI$imDat) & is.finite(super_sky)
       if(sum(obj_idx) == 0){ ## otherwise the linear model is going to fail
-        obj_idx = temp_sky$PIXELMASK$imDat==0 & temp_cal$SCI$imDat <= quantile(temp_cal$SCI$imDat, probs =  0.5, na.rm = TRUE) ## minimally select stuff less than the median
+        obj_idx = temp_sky$PIXELMASK$imDat==0 & is.finite(temp_cal$SCI$imDat) &
+          is.finite(super_sky) &
+          temp_cal$SCI$imDat <= quantile(temp_cal$SCI$imDat, probs =  0.5, na.rm = TRUE) ## minimally select stuff less than the median
       }
       
       ## linear model to each pixel 
-      temp_lm = lm(temp_cal$SCI$imDat[obj_idx] ~ super_sky[obj_idx])$coefficients
+      if(sum(obj_idx, na.rm = TRUE) < 2){
+        message("Insufficient sky-fit pixels for ", basename(file_image), "; using median-only sky fallback")
+        temp_lm = c(stats::median(temp_cal$SCI$imDat[is.finite(temp_cal$SCI$imDat)], na.rm = TRUE), 0)
+      }else{
+        temp_lm = tryCatch(
+          lm(temp_cal$SCI$imDat[obj_idx] ~ super_sky[obj_idx])$coefficients,
+          error = function(e){
+            message("Sky linear fit failed for ", basename(file_image), ": ", conditionMessage(e), "; using median-only sky fallback")
+            c(stats::median(temp_cal$SCI$imDat[is.finite(temp_cal$SCI$imDat)], na.rm = TRUE), 0)
+          }
+        )
+      }
+      if(!is.finite(temp_lm[1])){
+        temp_lm[1] = 0
+      }
       
       if(is.na(temp_lm[2])){
         temp_lm[2] = 0
@@ -2218,7 +2501,7 @@ do_gen_stack = function(input_args){
   magzero = input_args$magzero
   cores = input_args$cores_stack
   tasks = input_args$tasks_stack
-  effective_cores = ifelse(tasks > 1L, max(1L, floor(input_args$cores_pro / tasks)), input_args$cores_pro)  ## full budget when serial, divided when parallel
+  effective_cores = ifelse(tasks > 1L, max(1L, floor(input_args$cores_pro / tasks)), input_args$cores_pro)  ## legacy estimate; actual stack cores are capped by active outer workers below
   ram_mode = grepl("T|TRUE|True", Sys.getenv("JUMPROPE_RAM_MODE"))
   
   skip_completed_files = additional_params$skip_completed_files
@@ -2264,6 +2547,27 @@ do_gen_stack = function(input_args){
   
   message("Now running stack!")
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+
+  stack_input_size = function(module_name, visit_id, filter_name){
+    detector_pattern = switch(
+      module_name,
+      MIRIMAGE = 'MIRIMAGE',
+      NIS = 'NIS',
+      NRCA_short = 'NRCA',
+      NRCB_short = 'NRCB',
+      NRCA_long = 'NRCA',
+      NRCB_long = 'NRCB',
+      ''
+    )
+    if(!nzchar(detector_pattern)){
+      return(0L)
+    }
+    as.integer(sum(
+      cal_sky_info[['VISIT_ID']] == visit_id &
+      cal_sky_info[['FILTER']] == filter_name &
+      grepl(detector_pattern, cal_sky_info[['DETECTOR']])
+    ))
+  }
   
   temp_vid = VID
   VID_list = grep(paste0("^",temp_vid), unique_visits, value = T)
@@ -2347,8 +2651,47 @@ do_gen_stack = function(input_args){
     }
     
     task_budget = tasks
-    stack_cores_cap = effective_cores
-    if(ram_mode && nrow(cal_sky_info) >= 400L){
+    stack_cores_cap = min(cores, input_args$cores_pro)
+    max_inputs_per_stack = max(
+      vapply(
+        module_list,
+        function(module_name){
+          max(
+            vapply(
+              seq_len(nrow(stack_grid)),
+              function(idx){
+                stack_input_size(
+                  module_name = module_name,
+                  visit_id = stack_grid[idx, 'VISIT_ID'],
+                  filter_name = stack_grid[idx, 'FILTER']
+                )
+              },
+              integer(1)
+            ),
+            0L
+          )
+        },
+        integer(1)
+      ),
+      0L
+    )
+    if(hi_loop <= 1L){
+      task_budget = 1L
+      stack_cores_cap = min(stack_cores_cap, cores)
+      message(
+        "Single stack workload detected. Running outer stack loop sequentially ",
+        "with stack_cores_cap=", stack_cores_cap,
+        " to avoid PSOCK serialization overhead."
+      )
+    }else if(max_inputs_per_stack >= 48L){
+      task_budget = 1L
+      stack_cores_cap = min(stack_cores_cap, 4L)
+      message(
+        "Large stack workload detected (max ", max_inputs_per_stack,
+        " inputs in a single stack). Using task_budget=", task_budget,
+        " and stack_cores_cap=", stack_cores_cap, "."
+      )
+    }else if(ram_mode && nrow(cal_sky_info) >= 400L){
       task_budget = 1L
       stack_cores_cap = min(stack_cores_cap, 8L)
       message(
@@ -2361,14 +2704,14 @@ do_gen_stack = function(input_args){
     outer_cores = jp_cap_task_cores(cores = task_budget, ntasks = hi_loop)
     cl <- register_jumprope_backend(
       cores = outer_cores,
-      parallel_type = if(task_budget > 1L) parallel_type else NULL,
+      parallel_type = if(outer_cores > 1L) parallel_type else NULL,
       fallback = "serial"
     )  ## fall back cleanly if the outer PSOCK backend cannot start
     
    dummy = foreach(
      i = lo_loop:hi_loop,
      .packages = c('Rwcs', 'Rfits', 'ProPane', 'ProFound', 'celestial'),
-     .export = c("jwst_dq_do_not_use_mask", "rfits_write_with_retry", "is_valid_fits_file")
+     .export = c("jwst_dq_do_not_use_mask", "rfits_write_with_retry", "is_valid_fits_file", "jp_stack_median_proxy", "jp_remove_tree")
    )%dopar%{
      message('Stacking ', i,' of ',hi_loop)
       for(j in module_list){
@@ -2542,29 +2885,66 @@ do_gen_stack = function(input_args){
           temp_proj$DATE_BEG = as.character(min(as.POSIXlt.Date(input_info[["DATE.OBS"]]), na.rm=TRUE))
           temp_proj$DATE_END = as.character(max(as.POSIXlt.Date(input_info[["DATE.OBS"]]), na.rm=TRUE))
           
+          large_stack_mode = nrow(input_info) >= 48L
           stack_cores = min(
             stack_cores_cap,
-            ifelse(task_budget > 1L, max(1L, floor(input_args$cores_pro / task_budget)), input_args$cores_pro)
+            ifelse(outer_cores > 1L, max(1L, floor(input_args$cores_pro / outer_cores)), input_args$cores_pro)
           )
+          if(large_stack_mode){
+            stack_cores = 1L
+            message(
+              '  Large stack mode for ', stack_grid[i,'VISIT_ID'], ' ', stack_grid[i,'FILTER'], ' ', j,
+              ': ', nrow(input_info), ' inputs, stack_cores=', stack_cores, ', multitype=cluster'
+            )
+          }
+          stack_multitype = if(large_stack_mode || task_budget <= 1L) "cluster" else "fork"
           
-          output_stack = propaneStackWarpInVar(
-            image_list = image_list_point,
-            inVar_list = inVar_list,
-            exp_list = input_info$EFFEXPTM,
-            magzero_in = input_info$MAGZERO_FIX,
-            magzero_out = magzero,
-            keyvalues_out = temp_proj,
-            cores = stack_cores, 
-            direction = 'backward',
-            doclip = doclip,
-            clip_tol = clip_tol,
-            clip_dilate = clip_dilate,
-            clip_sigma = clip_sigma,
-            keep_extreme_pix = FALSE,
-            dump_frames = TRUE,
-            dump_dir = dump_stub,
-            multitype = ifelse(task_budget > 1L, "fork", "cluster")  ## fork inside PSOCK outer avoids PSOCK-in-PSOCK deadlock
+          run_stack_invar = function(dump_frames){
+            propaneStackWarpInVar(
+              image_list = image_list_point,
+              inVar_list = inVar_list,
+              exp_list = input_info$EFFEXPTM,
+              magzero_in = input_info$MAGZERO_FIX,
+              magzero_out = magzero,
+              keyvalues_out = temp_proj,
+              cores = stack_cores,
+              direction = 'backward',
+              doclip = doclip,
+              clip_tol = clip_tol,
+              clip_dilate = clip_dilate,
+              clip_sigma = clip_sigma,
+              keep_extreme_pix = FALSE,
+              dump_frames = dump_frames,
+              dump_dir = dump_stub,
+              multitype = stack_multitype
+            )
+          }
+
+          dump_frames_ok = TRUE
+          output_stack = tryCatch(
+            run_stack_invar(TRUE),
+            error = function(e) e
           )
+          if(inherits(output_stack, "error")){
+            if(!large_stack_mode){
+              stop(output_stack)
+            }
+            message(
+              "  Large stack dump-frame write failed for ", stack_grid[i,'VISIT_ID'], " ",
+              stack_grid[i,'FILTER'], " ", j, ": ", conditionMessage(output_stack),
+              ". Retrying without dump frames; Median_Stacks will use stack-image proxy."
+            )
+            unlink(dump_stub, recursive = TRUE, force = TRUE)
+            dir.create(dump_stub, recursive = TRUE, showWarnings = FALSE)
+            gc()
+            output_stack = tryCatch(
+              run_stack_invar(FALSE),
+              error = function(e){
+                stop("Large stack retry without dump frames failed: ", conditionMessage(e))
+              }
+            )
+            dump_frames_ok = FALSE
+          }
           
           output_stack$image$keyvalues$CLIP_MIN = clip_tol[1]
           output_stack$image$keyvalues$CLIP_MAX = clip_tol[2]
@@ -2600,27 +2980,71 @@ do_gen_stack = function(input_args){
 
           filestub = paste0(invar_dir, '/stack_',stack_grid[i,'VISIT_ID'],'_',stack_grid[i,'FILTER'],'_',j)
 
+          stack_file = paste0(filestub,'.fits')
           rfits_write_with_retry(
             data = output_stack,  ## write InVar BEFORE propaneStackWarpMed: avoids cfitsio dump-handle interference
-            filename = paste0(filestub,'.fits')
+            filename = stack_file
           )
+          if(!is_valid_fits_file(stack_file)){
+            stop('Stack write failed validation for ', basename(stack_file))
+          }
 
-          median_stack = propaneStackWarpMed(dirlist = dump_stub,
-                                             pattern = glob2rx('*image_warp*'), 
-                                             keyvalues_out = output_stack$image$keyvalues, 
-                                             cores = ifelse(task_budget > 1L, 1L, stack_cores),  ## 1L inside PSOCK: sequential chunks avoid cfitsio fork race
-                                             multitype = ifelse(task_budget > 1L, "fork", "cluster"))  ## fork inside PSOCK outer
+          if(dump_frames_ok){
+            median_stack = propaneStackWarpMed(dirlist = dump_stub,
+                                               pattern = glob2rx('*image_warp*'),
+                                               keyvalues_out = output_stack$image$keyvalues,
+                                               cores = ifelse(large_stack_mode || task_budget > 1L, 1L, stack_cores),  ## sequential chunks avoid cfitsio race on large stacks / nested parallelism
+                                               multitype = stack_multitype)
+          }else{
+            median_stack = jp_stack_median_proxy(
+              output_stack,
+              reason = "propaneStackWarpInVar dump_frames write failed"
+            )
+          }
 
           gc()  ## flush propaneStackWarpMed cfitsio dump handles before median write
           gc()  ## run finalizers that may only execute after the first GC pass
 
           filestub_med = paste0(median_dir, '/med_',stack_grid[i,'VISIT_ID'],'_',stack_grid[i,'FILTER'],'_',j)
 
-          rfits_write_with_retry(
-            data = median_stack,
-            filename = paste0(filestub_med,'.fits')
-          )
+          median_file = paste0(filestub_med,'.fits')
+          median_write_error = tryCatch({
+            rfits_write_with_retry(
+              data = median_stack,
+              filename = median_file
+            )
+            if(!is_valid_fits_file(median_file)){
+              stop('Median stack write failed validation for ', basename(median_file))
+            }
+            NULL
+          }, error = function(e) e)
+
+          if(!is.null(median_write_error)){
+            if(!large_stack_mode){
+              stop(median_write_error)
+            }
+            message(
+              "  Large stack median write failed for ", stack_grid[i,'VISIT_ID'], " ",
+              stack_grid[i,'FILTER'], " ", j, ": ", conditionMessage(median_write_error),
+              ". Writing stack-image median proxy."
+            )
+            median_stack = jp_stack_median_proxy(
+              output_stack,
+              reason = "Rfits_write median stack failed"
+            )
+            rfits_write_with_retry(
+              data = median_stack,
+              filename = median_file
+            )
+            if(!is_valid_fits_file(median_file)){
+              stop('Median proxy write failed validation for ', basename(median_file))
+            }
+          }
           gc()
+          if(dir.exists(dump_stub)){
+            jp_remove_tree(dump_stub)
+            message("  Removed completed stack dump dir: ", dump_stub)
+          }
         }
       }
      return(NULL)
@@ -3121,9 +3545,9 @@ wispFixer = function(wisp_im, ref_im,
                      source_threshold=0.95, #Threshold on reference image for definitely real sources
                      scale_threshold=0.95, #When considering the +ve ratio map pixels, quantile to define very blue things
                      sky_threshold=0.5, #Safe threshold to find the correct sky level
-                     clip_threshold=0.997, #We avoid very bright pixels in the wisp template
+                     clip_threshold=0.975, #Validated production default from final database completion runs
                      sigma_hi=2,
-                     sigma_lo=2,
+                     sigma_lo=5,
                      poly=NULL,
                      cores=1){
   
@@ -3283,7 +3707,7 @@ do_help = function(input_args){
       cores_stack = cores_stack, ## <-- Cores for stacking with ProPane, numeric
       tasks_stack = tasks_stack, ## <-- Cores for parallel stacking jobs, numeric
   
-      SIGMA_LO = jp_env_numeric("JUMPROPE_WISP_SIGMA_LO", 2) # validated production default for low-frequency wisp smoothing
+      SIGMA_LO = jp_env_numeric("JUMPROPE_WISP_SIGMA_LO", 5) # validated production default for low-frequency wisp smoothing
     )'
   )
   
@@ -3470,7 +3894,7 @@ do_cleanup = function(input_args, force = FALSE){
 
     message("Wiping staging root ", staging_root)
     if(dir.exists(staging_root)){
-      unlink(staging_root, recursive = TRUE)
+      jp_remove_tree(staging_root)
     }
     message("Staging root wiped.")
 
@@ -3479,13 +3903,13 @@ do_cleanup = function(input_args, force = FALSE){
       if(nzchar(current_vid)){
         vid_dump = paste0(dump_dir_stub, current_vid)
         if(dir.exists(vid_dump)){
-          unlink(vid_dump, recursive = TRUE)
+          jp_remove_tree(vid_dump)
           message("  Wiped disk dump dir: ", vid_dump)
         }
       }
       disk_dump_dir = paste0(Sys.getenv("JUMPROPE_REF_DIR"), "/dump/")
       if(dir.exists(disk_dump_dir)){
-        unlink(disk_dump_dir, recursive = TRUE)
+        jp_remove_tree(disk_dump_dir)
       }
       message("Disk dump dirs wiped — cleanup complete.")
     }
@@ -3633,7 +4057,7 @@ jp_promote_cal_only = function(input_args){
 
   if(!is.null(staging_root) && nzchar(staging_root) && dir.exists(staging_root)){
     message("Wiping staging root ", staging_root)
-    unlink(staging_root, recursive = TRUE)
+    jp_remove_tree(staging_root)
     message("Staging root wiped.")
   }
 

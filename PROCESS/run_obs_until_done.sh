@@ -262,13 +262,27 @@ render_completed_obs_pngs() {
     return 0
   fi
   local per_obs="${JUMPROPE_QA_PNG_PER_OBS:-20}"
-  local detectors="${JUMPROPE_QA_PNG_DETECTORS:-nrcb3|nrcb4}"
+  local detectors="${JUMPROPE_QA_PNG_DETECTORS:-nrca3|nrca4|nrcb3|nrcb4}"
   python "$PROC/make_obs_png_samples.py" \
     --input-dir "$JUMPROPE_FINAL_CAL_SKY_RENORM_DIR" \
     --output-dir "$qa_dir" \
     --obs-ids "$completed_obs" \
     --detectors "$detectors" \
     --per-obs "$per_obs" \
+    --overwrite
+
+  python "$PROC/make_before_after_pngs.py" \
+    --png-dir "$qa_dir" \
+    --raw-dir "$JUMPROPE_RAW_DIR" \
+    --processed-dir "$JUMPROPE_FINAL_CAL_SKY_RENORM_DIR" \
+    --output-dir "$qa_dir/before_after" \
+    --overwrite
+
+  python "$PROC/make_wisp_triptych_pngs.py" \
+    --processed-dir "$JUMPROPE_FINAL_CAL_SKY_RENORM_DIR" \
+    --output-dir "$qa_dir/wisp_triptych" \
+    --obs-ids "$completed_obs" \
+    --detectors "$detectors" \
     --overwrite
 }
 
@@ -316,6 +330,10 @@ fi
 LOGDIR="$ROOT/logs/${JUMPROPE_RUN_NAME}"
 MAINLOG="$LOGDIR/run_obs_until_done.log"
 mkdir -p "$LOGDIR"
+
+printf '[%s] %s: effective config skip_completed=%s staging_mode=%s raw_dir=%s stage_dir=%s final_cal_dir=%s final_renorm_dir=%s\n' \
+  "$(date '+%F %T')" "$JUMPROPE_RUN_NAME" "${JUMPROPE_SKIP_COMPLETED_FILES:-}" "${JUMPROPE_STAGING_MODE:-}" \
+  "$JUMPROPE_RAW_DIR" "$JUMPROPE_REF_DIR" "${JUMPROPE_FINAL_CAL_DIR:-}" "$JUMPROPE_FINAL_CAL_SKY_RENORM_DIR" | tee -a "$MAINLOG"
 
 LOCKFILE="$LOGDIR/run_obs_until_done.lock"
 exec 9>"$LOCKFILE"

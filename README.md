@@ -38,6 +38,7 @@ Validated stable production defaults:
 - `OPENBLAS_NUM_THREADS=1`
 - `OMP_NUM_THREADS=1`
 - `MKL_NUM_THREADS=1`
-- `JUMPROPE_WISP_SIGMA_LO=2`
+- `JUMPROPE_WISP_SIGMA_LO=5`
+- `JUMPROPE_WISP_CLIP_THRESHOLD=0.975`
 
 Do not treat JUMPROPE as a fully object-native pipeline yet. Critical stages still rely on on-disk FITS products because of Rfits / ProPane / ProFound behavior.

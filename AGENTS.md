@@ -2,7 +2,7 @@
 
 This file is for new coding agents working in `/data7/rzi/PEARLSplus/JUMPROPE`.
 
-It documents the current stable working state of JUMPROPE as of Saturday, August 8, 2026, including the recent restructuring, safety patches, staging mode, partial RAM-mode support, cleanup logic, and the practical rules that kept the pipeline stable.
+It documents the current stable working state of JUMPROPE as of Wednesday, August 19, 2026, including the recent restructuring, safety patches, staging mode, partial RAM-mode support, cleanup logic, and the practical rules that kept the pipeline stable.
 
 This file should be treated as the primary handoff document for future agents.
 
@@ -25,9 +25,9 @@ Use stable names for long supervised campaigns so future agents can reason about
   - raw input tree:
     - `/data4/rzi/NIRCAM/cal`
   - final output tree:
-    - `/data5/rzi/JUMPROPE_SKYSURFIR/Pro1oF/cal_sky_renorm`
+    - `/data1/rzi/jumprope/Pro1oF/cal_sky_renorm`
   - staging root:
-    - `/home/rzi/jumprope/tmp_skysurfir`
+    - `/home/rzi/jumprope/skysurfir_stage`
   - target observation list file:
     - [`PROCESS/skysurfir_obs_20260808.txt`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/skysurfir_obs_20260808.txt)
   - supervisor logs:
@@ -69,17 +69,21 @@ Operational rule:
 
 ## Current Environment And Runtime Defaults
 
-These values are currently set in [`initialise_env.sh`](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.sh):
+These values are currently set in the PEARLSplus active env file [`initialise_env.sh`](/data7/rzi/PEARLSplus/JUMPROPE/initialise_env.sh):
 
 ```sh
-export JUMPROPE_REF_DIR='/home/rzi/jumprope/tmp'
-export JUMPROPE_RAW_DIR='/data4/rzi/NIRCAM/cal'
-export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR='/data5/rzi/JUMPROPE/Pro1oF/cal_sky_renorm'
+export JUMPROPE_REF_DIR='/home/rzi/jumprope/pearl_stage'
+export JUMPROPE_RAW_DIR='/data7/rzi/PEARLSplus/nircam/cal'
+export JUMPROPE_FINAL_CAL_DIR='/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal'
+export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR='/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm'
 export JUMPROPE_STAGING_MODE=TRUE
+export JUMPROPE_SKIP_COMPLETED_FILES=TRUE
+export JUMPROPE_EXPAND_OBS_TO_VISITS=TRUE
+export JUMPROPE_RUN_NAME='PEARLSplus'
 
-export JUMPROPE_cores_pro=64
+export JUMPROPE_cores_pro=32
 export JUMPROPE_cores_stack=8
-export JUMPROPE_tasks_stack=8
+export JUMPROPE_tasks_stack=4
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -88,6 +92,8 @@ export MKL_NUM_THREADS=1
 export JUMPROPE_CLEANUP=TRUE
 export JUMPROPE_RAM_MODE=FALSE
 export JUMPROPE_DUMP_DIR=/data7/rzi/PEARLSplus/jumprope/dump
+export JUMPROPE_WISP_SIGMA_LO=5
+export JUMPROPE_WISP_CLIP_THRESHOLD=0.975
 ```
 
 Important interpretation:
@@ -96,19 +102,21 @@ Important interpretation:
 - `JUMPROPE_STAGING_MODE=TRUE` means `run_all_process.R` creates a fresh per-run session root under a sibling `tmp_sessions` directory and promotes completed outputs at cleanup time.
 - `JUMPROPE_RAM_MODE=FALSE` is intentional in this stable version. SSD staging is the preferred stability path. Pure tmpfs RAM mode caused FITS and cfitsio failure modes.
 - `JUMPROPE_DUMP_DIR` remains disk-backed because ProPane / cfitsio dump-frame writes were unstable on tmpfs.
+- The currently validated database-run wisp defaults are `JUMPROPE_WISP_SIGMA_LO=5` and `JUMPROPE_WISP_CLIP_THRESHOLD=0.975`.
 
 These values are currently set in [`PROCESS/initialise_variables.R`](/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/initialise_variables.R):
 
 ```r
-skip_completed_files = FALSE
-ow_large = TRUE
+skip_completed_files = TRUE
+ow_vlarge = TRUE
+ow_large = FALSE
 do_claws = TRUE
 parallel_type = 'PSOCK'
 ```
 
 Important interpretation:
-- `skip_completed_files = FALSE` means a normal run rebuilds each requested VID from scratch.
-- If the user wants resume behavior, this variable must be changed to `TRUE`, or the code path must explicitly skip complete VIDs.
+- `skip_completed_files = TRUE` means normal production runs resume by skipping fully promoted VIDs.
+- If the user wants a forced rebuild, set `JUMPROPE_SKIP_COMPLETED_FILES=FALSE` in the environment or template for that run.
 - `parallel_type = 'PSOCK'` is part of the stability fix set. Do not switch back to forked stacking casually.
 
 ## Directory Model
@@ -116,11 +124,11 @@ Important interpretation:
 Current working pattern:
 
 - Staging root:
-  - `/home/rzi/jumprope/tmp`
+  - `/home/rzi/jumprope/pearl_stage`
 - Per-run session root:
-  - `/home/rzi/jumprope/tmp_sessions/run_<VID>_<PID>_<timestamp>`
+  - `/home/rzi/jumprope/pearl_stage_sessions/run_<VID>_<PID>_<timestamp>`
 - Durable final products:
-  - `/data5/rzi/JUMPROPE/Pro1oF/cal_sky_renorm`
+  - `/data7/rzi/PEARLSplus/jumprope/Pro1oF/cal_sky_renorm`
 
 Within a staging run, JUMPROPE expects:
 
@@ -332,8 +340,8 @@ Stable behavior:
 
 ### Full rebuild mode
 
-Current default in `initialise_variables.R`:
-- `skip_completed_files = FALSE`
+Forced rebuild mode:
+- set `JUMPROPE_SKIP_COMPLETED_FILES=FALSE`
 
 Meaning:
 - each requested VID is reset and rebuilt from the raw inputs
@@ -342,7 +350,10 @@ Meaning:
 
 ### Resume mode
 
-When `skip_completed_files = TRUE`:
+Current resume default:
+- `skip_completed_files = TRUE`
+
+When resume mode is active:
 - `run_all_process.R` checks final promoted outputs using `jp_expected_renorm_state()`
 - fully complete VIDs are skipped
 - incomplete VIDs continue processing
@@ -384,6 +395,12 @@ Earlier user observations of persistent wisps were partly due to:
 - using `zork_process.R` step sequences that did not reproduce the full `run_all_process.R` ordering
 - crashy stack/wisp paths
 - some no-overlap cases where wisp correction could not be cleanly derived
+
+As of the final database completion runs, the validated production defaults for the wisp fitter are:
+- `clip_threshold = 0.975`
+- `sigma_lo = 5`
+
+These replaced earlier defaults that were too conservative for some faint or partly diffuse PEARLSplus wisps.
 
 Practical rule:
 - if the scientific goal is truly wisp-removed `cal_sky_renorm`, use `run_all_process.R` unless there is a very specific reason not to
@@ -493,11 +510,13 @@ cd /data7/rzi/PEARLSplus/JUMPROPE/PROCESS
 export JUMPROPE_RUN_NAME=SKYSURFIR
 export JUMPROPE_TARGET_IDS_FILE=/data7/rzi/PEARLSplus/JUMPROPE/PROCESS/skysurfir_obs_20260808.txt
 export JUMPROPE_RAW_DIR=/data4/rzi/NIRCAM/cal
-export JUMPROPE_REF_DIR=/home/rzi/jumprope/tmp_skysurfir
-export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR=/data5/rzi/JUMPROPE_SKYSURFIR/Pro1oF/cal_sky_renorm
+export JUMPROPE_REF_DIR=/home/rzi/jumprope/skysurfir_stage
+export JUMPROPE_FINAL_CAL_SKY_RENORM_DIR=/data1/rzi/jumprope/Pro1oF/cal_sky_renorm
 export JUMPROPE_STAGING_MODE=TRUE
 export JUMPROPE_RAM_MODE=FALSE
-export JUMPROPE_SKIP_COMPLETED_FILES=FALSE
+export JUMPROPE_SKIP_COMPLETED_FILES=TRUE
+export JUMPROPE_WISP_SIGMA_LO=5
+export JUMPROPE_WISP_CLIP_THRESHOLD=0.975
 bash ./run_obs_until_done.sh 2>&1 | tee /data7/rzi/PEARLSplus/JUMPROPE/logs/SKYSURFIR/nohup.log
 ```
 

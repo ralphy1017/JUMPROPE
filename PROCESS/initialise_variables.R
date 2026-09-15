@@ -5,9 +5,19 @@
 initialise_params = function(){
  
   skip_completed_files_env = Sys.getenv("JUMPROPE_SKIP_COMPLETED_FILES")
-  skip_completed_files_default = FALSE
+  skip_completed_files_default = TRUE
   if(nzchar(skip_completed_files_env)){
     skip_completed_files_default = grepl("^(T|TRUE|1)$", skip_completed_files_env, ignore.case = TRUE)
+  }
+
+  parallel_type_env = Sys.getenv("JUMPROPE_PARALLEL_TYPE")
+  parallel_type_default = "PSOCK"
+  if(nzchar(parallel_type_env)){
+    if(grepl("^(NULL|NONE|SEQ|SERIAL)$", parallel_type_env, ignore.case = TRUE)){
+      parallel_type_default = NULL
+    }else{
+      parallel_type_default = parallel_type_env
+    }
   }
  
   ## Edit this:
@@ -41,8 +51,8 @@ initialise_params = function(){
     
    ## overwrite and use one 1/f setting for everything. 
    ## so you don't have to laboriously type out every single VISITID and MODULE combination :D
-   ow_vlarge = FALSE,
-   ow_large = TRUE,
+   ow_vlarge = TRUE,
+   ow_large = FALSE,
    
    ## Claws removal mode
    ## I.e., perform "wisp removal" algorithm on all NIRCam short wavelength detectors
@@ -56,7 +66,7 @@ initialise_params = function(){
    NAXIS_short = NULL, ## Size of the short pixel scales mosaic, keep NULL for default (6000 pixels) 
    module_list = NULL, ## What modules should we stack, options are ('NRCA_short', 'NRCA_long', 'NRCB_short', 'NRCB_long', 'NIS', 'MIRIMAGE')
    
-   parallel_type = 'PSOCK' ## type options for makeCluster in parallel for stacking and wisp removal, type='PSOCK' might be more stable on Linux systems
+   parallel_type = parallel_type_default ## type options for makeCluster in parallel for stacking and wisp removal, type='PSOCK' might be more stable on Linux systems
   )
   ## Finish editing
 
