@@ -88,11 +88,10 @@ main = function(){
   
   raw_files = load_raw_files(dir_raw = dir_raw)
   
-  VID_list = ifelse(
-    VID == "",
-    c(""),
-    unlist(strsplit(VID, "|", fixed = T))
-  )
+  ## [nep-miri] ifelse() returned only the first of "A|B|C", so only the first program was processed. Keep the combined
+  ## VID in one pass instead (vid_match() in all_codes_process.R selects every part), so the super-skies use the frames of
+  ## all programs together.
+  VID_list = VID
   
   for(VID in VID_list){
     
