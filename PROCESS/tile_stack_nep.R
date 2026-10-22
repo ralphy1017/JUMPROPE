@@ -12,43 +12,47 @@ library(stringr)
 library(Cairo)
 
 ## -- START OF EDIT --
-## [nep-miri] NEP TDF: mosaics from the cal_sky_renorm frames (calstack) on the global grid of make_grids.py
-## (~/JP/grids/grid_<inst>.rds: one tangent point and footprint for all imaging, north up, native scale), so every
-## mosaic of an instrument is pixel- and WCS-aligned; aligned to ~/JP/refcat_nep.csv (NIRCam F444W, HST F606W, Gaia DR3).
-## Usage: Rscript tile_stack_nep.R <miri|nircam> <FILT regex> <program id | all>
+## [nep-miri] Mosaic of the cal_sky_renorm frames (calstack) of one filter and one group of visits on a global grid
+## (make_grids.py: <root>/grids/grid_<inst>.json), so every mosaic of an instrument is pixel- and WCS-aligned; aligned to
+## <root>/refcat.csv (RA, Dec). A group is a regex of VISIT_ID prefixes, e.g. "6616" (program), "6616001" (observation),
+## "6616001001" (visit), "6616|8303" (several), "" (all).
+## Usage: Rscript tile_stack_nep.R <miri|nircam> <FILT> <group regex> <label>    (root = $JP_ROOT, default ~/JP)
 cmd = commandArgs(trailingOnly = TRUE)
-inst = cmd[1]; filt = cmd[2]; prog = ifelse(length(cmd) >= 3, cmd[3], "all")
-pixscale = ifelse(inst == "miri", 0.11, 0.03)
-ref_cat = fread("/Users/ralphy/JP/refcat_nep.csv")
+inst = cmd[1]; filt = cmd[2]; group = cmd[3]; label = cmd[4]
+root = Sys.getenv("JP_ROOT", "/Users/ralphy/JP")
+g = jsonlite::fromJSON(paste0(root, "/grids/grid_", inst, ".json"))
+grid_wcs = Rwcs_setkeyvalues(CRVAL1 = g$crval[1], CRVAL2 = g$crval[2], NAXIS1 = g$shape_xy[1], NAXIS2 = g$shape_xy[2],
+  CRPIX1 = g$crpix_fits[1], CRPIX2 = g$crpix_fits[2], CTYPE1 = "RA---TAN", CTYPE2 = "DEC--TAN", CUNIT1 = "deg", CUNIT2 = "deg",
+  CD1_1 = g$cd[1, 1], CD1_2 = 0, CD2_1 = 0, CD2_2 = g$cd[2, 2])
+grid_rds = tempfile(fileext = ".rds"); saveRDS(grid_wcs, grid_rds)
+ref_cat = fread(paste0(root, "/refcat.csv"))
 names(ref_cat) = c("RA", "Dec")
-tag = paste0(toupper(inst), prog)
 input_args = list(
-  ref_dir = "/Users/ralphy/JP/PRO",
-  super_name = paste0("NEP", tag),
+  ref_dir = paste0(root, "/PRO"),
+  super_name = paste0(toupper(inst), label),
   ref_cat = ref_cat,
-  RA = 260.70,
-  Dec = 65.80,
+  RA = g$crval[1],
+  Dec = g$crval[2],
   calstack = TRUE,
   grid_size = "",
   mosaic_size = NULL,
   rotation = "North",
-  pixelscale = pixscale,
+  pixelscale = g$scale_arcsec,
   magzero_out = 23.9,
-  program_id = if (prog == "all") NULL else prog,
+  program_id = if (group == "") NULL else paste0("(", group, ")"),
   FILT = filt,
-  ref_frame = sprintf("/Users/ralphy/JP/grids/grid_%s.rds", inst),
-  cores = as.integer(Sys.getenv("JUMPROPE_cores_pro", "12")),
-  cores_search = as.integer(Sys.getenv("JUMPROPE_cores_pro", "12"))
+  ref_frame = grid_rds,
+  cores = as.integer(Sys.getenv("JUMPROPE_cores_pro", "4")),
+  cores_search = as.integer(Sys.getenv("JUMPROPE_cores_pro", "4"))
 )
 additional_args = list(
-  mosaic_dir = paste0("/Users/ralphy/JP/PRO/Mosaics/", inst, "/", prog, "/"),
-  dump_dir = "/Users/ralphy/JP/PRO/dump/",
-  cal_sky_info_stub = "/Users/ralphy/JP/PRO/Pro1oF/cal_sky_info.csv",
-  patch_dir = "/Users/ralphy/JP/PRO/Patch_Stacks/",
-  cal_sky_renorm_dir = "/Users/ralphy/JP/PRO/Pro1oF/cal_sky_renorm/",
-  sky_frames_dir = "/Users/ralphy/JP/PRO/sky_pro/sky_frames/"
+  mosaic_dir = paste0(root, "/PRO/Mosaic_Stacks/"),
+  dump_dir = paste0(root, "/PRO/dump/"),
+  cal_sky_info_stub = paste0(root, "/PRO/Pro1oF/cal_sky_info.csv"),
+  patch_dir = paste0(root, "/PRO/Patch_Stacks/"),
+  cal_sky_renorm_dir = paste0(root, "/PRO/Pro1oF/cal_sky_renorm/"),
+  sky_frames_dir = paste0(root, "/PRO/sky_pro/sky_frames/")
 )
-dir.create(additional_args$mosaic_dir, recursive = TRUE, showWarnings = FALSE)
 ## -- END OF EDIT --
 input_args$additional_args = additional_args
 deep_stacker = function(input_args){
