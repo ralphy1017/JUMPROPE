@@ -304,6 +304,12 @@ deep_stacker = function(input_args){
         message(
           paste0("Tweaking ", filenames[k])
         )
+        ## [nep-miri] Jointly aligned inputs already carry the shared reference
+        ## solution. Preserve it rather than independently re-fitting peaks.
+        if(Sys.getenv("JUMPROPE_USE_ALIGNED_WCS", "F") == "T"){
+          tweak_cat = list(par = c(0,0,0))
+          twIDX = k
+        }else{
         ## Default ProFound source detection, ends up being ~1.5 sigma source detect level
         pro_test = profoundProFound( 
           image = image_list[[k]][,],
@@ -338,6 +344,8 @@ deep_stacker = function(input_args){
           }
         }
         
+        } ## [nep-miri] optional independent catalogue tweak
+
         tempim = image_list[[k]][,]
         tempim$imDat[is.infinite(tempim$imDat)] = NA
         image_list[[k]] = propaneWCSmod(
