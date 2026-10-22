@@ -6,13 +6,24 @@
 ## Usage: Rscript profound_nep.R <miri|nircam> <mosaic label, e.g. 6616 | all>     (root = $JP_ROOT, default ~/JP)
 ## Reads <root>/PRO/Mosaic_Stacks/Patch/patch_<INST>_<label>_<FILT>.fits (run_mosaics.py).
 ## Writes <root>/PRO/ProFound/<inst>_<label>/: detect_segim.fits, cat_detect.csv, cat_<FILT>.csv and cat_multiband.csv.
-setwd("/Users/ralphy/Work/research/codes/JUMPROPE/PROFOUND")
+## [nep-miri] Script-relative source() instead of setwd() to an absolute path, so this
+## runs on any machine. --file= is set when invoked via Rscript; JUMPROPE_DIR overrides.
+.jp_script_dir = function(){
+  a = commandArgs(trailingOnly = FALSE)
+  f = sub("^--file=", "", a[grep("^--file=", a)])
+  if(length(f) == 1 && nzchar(f)) return(dirname(normalizePath(f)))
+  d = Sys.getenv("JUMPROPE_DIR", "")
+  if(nzchar(d)) return(file.path(normalizePath(d), "PROFOUND"))
+  return(normalizePath(getwd()))
+}
+.jp_dir = .jp_script_dir()
 suppressMessages({library(Rfits); library(Rwcs); library(ProFound); library(data.table); library(magicaxis)})
-source("ProFound_settings.R")
+source(file.path(.jp_dir, "ProFound_settings.R"))
 
 cmd = commandArgs(trailingOnly = TRUE)
 inst = cmd[1]; prog = cmd[2]
-root = Sys.getenv("JP_ROOT", "/Users/ralphy/JP")
+root = Sys.getenv("JP_ROOT", "")  ## [nep-miri] no Mac default
+if(!nzchar(root)) stop("JP_ROOT is not set: source environment/env.sh or export it")
 tag = paste0(toupper(inst), "_", prog)
 pdir = paste0(root, "/PRO/Mosaic_Stacks/Patch")
 files = list.files(pdir, pattern = paste0("^patch_", tag, "_F.*\\.fits$"), full.names = TRUE)

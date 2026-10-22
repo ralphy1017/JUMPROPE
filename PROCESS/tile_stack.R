@@ -245,7 +245,7 @@ deep_stacker = function(input_args){
             image = temp_image,
             patch = T
           )
-          JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "3"))) ## [nep-miri] dilation of DO_NOT_USE before warping: 3x3 turned 5.9% masked MIRI pixels into 19%
+          JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "1"))) ## [nep-miri] dilation of DO_NOT_USE before warping: 3x3 turned 5.9% masked MIRI pixels into 19%
           temp_image$imDat[JWST_cal_mask==1] = NA
           return(temp_image)
         })

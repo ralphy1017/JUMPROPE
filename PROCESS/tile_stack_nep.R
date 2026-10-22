@@ -19,7 +19,8 @@ library(Cairo)
 ## Usage: Rscript tile_stack_nep.R <miri|nircam> <FILT> <group regex> <label>    (root = $JP_ROOT, default ~/JP)
 cmd = commandArgs(trailingOnly = TRUE)
 inst = cmd[1]; filt = cmd[2]; group = cmd[3]; label = cmd[4]
-root = Sys.getenv("JP_ROOT", "/Users/ralphy/JP")
+root = Sys.getenv("JP_ROOT", "")  ## [nep-miri] no Mac default
+if(!nzchar(root)) stop("JP_ROOT is not set: source environment/env.sh or export it")
 g = jsonlite::fromJSON(paste0(root, "/grids/grid_", inst, ".json"))
 grid_wcs = Rwcs_setkeyvalues(CRVAL1 = g$crval[1], CRVAL2 = g$crval[2], NAXIS1 = g$shape_xy[1], NAXIS2 = g$shape_xy[2],
   CRPIX1 = g$crpix_fits[1], CRPIX2 = g$crpix_fits[2], CTYPE1 = "RA---TAN", CTYPE2 = "DEC--TAN", CUNIT1 = "deg", CUNIT2 = "deg",
@@ -239,7 +240,7 @@ deep_stacker = function(input_args){
             image = temp_image,
             patch = T
           )
-          JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "3"))) ## [nep-miri] dilation of DO_NOT_USE before warping: 3x3 turned 5.9% masked MIRI pixels into 19%
+          JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "1"))) ## [nep-miri] dilation of DO_NOT_USE before warping: 3x3 turned 5.9% masked MIRI pixels into 19%
           temp_image$imDat[JWST_cal_mask==1] = NA
           return(temp_image)
         })

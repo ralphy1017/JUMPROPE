@@ -1356,7 +1356,7 @@ do_gen_stack = function(input_args){
               patch = T
             )
             
-            JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "3"))) ## [nep-miri] see tile_stack
+            JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=as.integer(Sys.getenv("JUMPROPE_dq_dilate", "1"))) ## [nep-miri] see tile_stack
             temp_image$imDat[JWST_cal_mask==1] = NA
             
             if(do_tweak){
