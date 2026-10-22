@@ -1,5 +1,14 @@
 ## [nep-miri] jwst >= 3 writes DQ as uint32, which Rfits reads as integer64; "%% 2" on that is not a matrix
 ## (profoundDilate: "Not a matrix."). Convert DQ to a numeric matrix before the bit tests.
+## [nep-miri] VID may be "A|B|C" (several programs or visits, as in the manual): keep the visit IDs that start
+## with any of them. The original fixed-string grep matched "A|B" literally.
+vid_match = function(visit_ids, VID){
+  v = paste0(visit_ids)
+  if(VID == "") return(rep(TRUE, length(v)))
+  parts = strsplit(VID, "|", fixed = TRUE)[[1]]
+  Reduce(`|`, lapply(parts, function(p) startsWith(v, p)))
+}
+
 dq_numeric = function(m){
   d = dim(m)
   m = as.numeric(m)
@@ -38,9 +47,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }
     
     scan_1oF = Rfits_key_scan(filelist = files_1oF, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
+    pid_idx = vid_match(scan_1oF$VISIT_ID, VID) ## [nep-miri]
     
     files_1oF = files_1oF[pid_idx]
     files_1oF = files_1oF[grepl(FILT, scan_1oF$FILTER[pid_idx])]
@@ -62,9 +69,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }
     
     scan_cal = Rfits_key_scan(filelist = files_cal, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal$VISIT_ID %in% corr_pid
+    pid_idx = vid_match(scan_cal$VISIT_ID, VID) ## [nep-miri]
     
     files_cal = files_cal[pid_idx]
     files_cal = files_cal[grepl(FILT, scan_cal$FILTER[pid_idx])]
@@ -87,9 +92,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }
     
     scan_sky = Rfits_key_scan(filelist = files_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_sky$VISIT_ID %in% corr_pid
+    pid_idx = vid_match(scan_sky$VISIT_ID, VID) ## [nep-miri]
     
     files_sky = files_sky[pid_idx]
     files_sky = files_sky[grepl(FILT, scan_sky$FILTER[pid_idx])]
@@ -98,9 +101,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
   
   if(which_module == "apply_super"){
     
-    corr_pid = grep(VID, sky_info$visit_id, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = paste0(sky_info$visit_id) %in% corr_pid
+    pid_idx = vid_match(sky_info$visit_id, VID) ## [nep-miri]
     
     sky_info = sky_info[grepl(VID, sky_info$fileim) & pid_idx & grepl(FILT, sky_info$filter), ]
     
@@ -128,9 +129,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
     }
     
     scan_cal_sky = Rfits_key_scan(filelist = files_cal_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal_sky$VISIT_ID %in% corr_pid
+    pid_idx = vid_match(scan_cal_sky$VISIT_ID, VID) ## [nep-miri]
     
     files_cal_sky = files_cal_sky[pid_idx]
     files_cal_sky = files_cal_sky[grepl(FILT, scan_cal_sky$FILTER[pid_idx])]
@@ -142,9 +141,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
     files_wisp = files_wisp[grepl(VID, files_wisp) & grepl(".fits$", files_wisp)]
     
     scan_1oF = Rfits_key_scan(filelist = files_wisp,keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID]
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
+    pid_idx = vid_match(scan_1oF$VISIT_ID, VID) ## [nep-miri]
     
     files_wisp = files_wisp[pid_idx]
     return(files_wisp)
