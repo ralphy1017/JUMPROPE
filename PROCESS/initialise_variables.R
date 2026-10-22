@@ -11,7 +11,8 @@ initialise_params = function(){
     ## Keep trend data determines the aggressiveness of the 1/f. If nothing in this data frame, then default 1/f proceeds. 
     ## Default should be good for most blank fields.
     
-    skip_completed_files = FALSE, ## Only process files (in any step) that do not exist in the specified directory
+    ## [nep-miri] env-driven so one config file can drive any programme.
+    skip_completed_files = toupper(Sys.getenv("JUMPROPE_SKIP_COMPLETED_FILES", "FALSE")) %in% c("T","TRUE","1","YES"),
     
     ## vlarge for big objects that fill frame e.g., VV191. Least aggressive 1/f.
     ID_vlarge = data.frame(
@@ -44,13 +45,33 @@ initialise_params = function(){
    do_claws = FALSE, 
    
    ## Path to reference astrometric catalogue - to make the ProPane stacks
-   tweak_catalogue = NULL, ## NULL will have no internal tweak
+   ## [nep-miri] JUMPROPE_TWEAK_CATALOGUE: path to the astrometric reference
+   ## catalogue for the ProPane stacks. Empty/unset keeps the upstream NULL
+   ## (no internal tweak), which is what we want once the exposures have
+   ## already been aligned by jwst tweakreg.
+   tweak_catalogue = local({
+     v = Sys.getenv("JUMPROPE_TWEAK_CATALOGUE", "")
+     if(!nzchar(v) || toupper(v) == "NULL") NULL else v
+   }),
 
-   NAXIS_long = NULL, ## Size of the long pixel scales mosaic, keep NULL for default (3000 pixels) 
-   NAXIS_short = NULL, ## Size of the short pixel scales mosaic, keep NULL for default (6000 pixels) 
-   module_list = NULL, ## What modules should we stack, options are ('NRCA_short', 'NRCA_long', 'NRCB_short', 'NRCB_long', 'NIS', 'MIRIMAGE')
-   
-   parallel_type = NULL ## type options for makeCluster in parallel for stacking and wisp removal, type='PSOCK' might be more stable on Linux systems
+   ## [nep-miri] env-driven: JUMPROPE_NAXIS_LONG / JUMPROPE_NAXIS_SHORT.
+   NAXIS_long = local({v = Sys.getenv("JUMPROPE_NAXIS_LONG", ""); if(nzchar(v)) as.integer(v) else NULL}),
+   NAXIS_short = local({v = Sys.getenv("JUMPROPE_NAXIS_SHORT", ""); if(nzchar(v)) as.integer(v) else NULL}),
+
+   ## [nep-miri] JUMPROPE_MODULE_LIST, comma or pipe separated, e.g.
+   ## "MIRIMAGE" or "NRCA_long,NRCB_long". Unset keeps the upstream default.
+   module_list = local({
+     v = Sys.getenv("JUMPROPE_MODULE_LIST", "")
+     if(!nzchar(v)) NULL else trimws(strsplit(v, "[,|]")[[1]])
+   }),
+
+   ## [nep-miri] JUMPROPE_PARALLEL_TYPE, default PSOCK: on Linux, forked
+   ## workers plus a multi-threaded BLAS can deadlock on a mutex, and PSOCK
+   ## workers are fresh processes that avoid it.
+   parallel_type = local({
+     v = Sys.getenv("JUMPROPE_PARALLEL_TYPE", "PSOCK")
+     if(!nzchar(v) || toupper(v) == "NULL") NULL else v
+   })
   )
   ## Finish editing
 
