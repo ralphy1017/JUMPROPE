@@ -14,3 +14,4 @@ export JUMPROPE_cores_pro=12      ## 14 logical cores / 36 GB RAM on this machin
 export JUMPROPE_cores_stack=4
 export JUMPROPE_tasks_stack=3
 export JUMPROPE_dl_threads=8
+export JUMPROPE_dq_dilate=1     ## no dilation of the DQ mask when warping (tile_stack); upstream default 3
