@@ -240,7 +240,7 @@ deep_stacker = function(input_args){
         image_list = lapply(1:dim(file_info_filt)[1], function(kk){
           ## Same masking as in gen_stack
           temp_image = Rfits_read_image(file_info_filt[kk,'full'], ext=2)
-          temp_mask = Rfits_read_image(file_info_filt[kk,'full'], ext=4, header=FALSE)
+          temp_mask = Rfits_read_image(file_info_filt[kk,'full'], ext=4, header=FALSE); temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [nep-miri] integer64 DQ (jwst 3)
           temp_image = propaneBadPix(
             image = temp_image,
             patch = T
