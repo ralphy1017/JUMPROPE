@@ -1560,9 +1560,15 @@ do_wisp_rem = function(input_args){
     return(invisible(NULL))
   }
   
-  idx_wisp_skip = !(unname(sapply( info_wisp$full, function(x){any(na.omit(Rfits_extnames(x)) == "SCI_ORIG")} )) & skip_completed_files)
+  ## [nep-miri] SCI_ORIG is saved before fitting and survives failed workers.
+  ## Require every successful-stage diagnostic, not the backup alone.
+  complete = vapply(info_wisp$full, function(x){
+    all(c("SCI_ORIG", "REF_WISP_WARP", "WISP_TEMPLATE") %in% na.omit(Rfits_extnames(x)))
+  }, logical(1))
+  idx_wisp_skip = !(complete & skip_completed_files)
   
-  ref_im_list = {}
+  ## [nep-miri] Preserve exposure indices when rows are skipped or lack a ref.
+  ref_im_list = vector("list", nrow(info_wisp))
   for(ii in 1:dim(mod_visit_grid)[1]){
     if(idx_wisp_skip[ii]){
       ## Look for long channel in the same VID
@@ -1601,15 +1607,17 @@ do_wisp_rem = function(input_args){
         ref_file_long = ref_files[ which(grepl(long_num, ref_files))[1] ] #Get the longest filter
         load_ref = list(Rfits_point(ref_file_long))
       }
-      ref_im_list = c(ref_im_list, load_ref) ## Allow loop in wisp rem to read long wavelength reference
+      ref_im_list[ii] = if(is.null(load_ref)) list(NULL) else load_ref
     }
   }
   
   if(is.null(parallel_type)){
     registerDoParallel(cores = cores)
+    on.exit({stopImplicitCluster(); registerDoSEQ()}, add=TRUE)
   }else{
     cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
     registerDoParallel(cl)
+    on.exit({stopCluster(cl); registerDoSEQ()}, add=TRUE)
   }
   
   ## [nep-miri] Fresh PSOCK workers do not inherit global wispFixer. Export it
@@ -1625,7 +1633,11 @@ do_wisp_rem = function(input_args){
         message("No long wavelength - skipping...")
         return(NULL)
       }else{
-        wisp_frame = Rfits_read_image(info_wisp$full[ii], ext = 2)
+        ## [nep-miri] Resume from the saved original if a prior attempt failed
+        ## after SCI was written. Never subtract a template twice.
+        original_ext = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
+        wisp_frame = Rfits_read_image(info_wisp$full[ii],
+                                     ext = if(is.na(original_ext)) 2 else original_ext)
         
         check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
         extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
@@ -1670,13 +1682,7 @@ do_wisp_rem = function(input_args){
     }
   }
   
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
-    registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
-  }
+  ## Cluster cleanup is registered on exit, including worker errors.
   gc()
 }
 do_patch = function(input_args){
