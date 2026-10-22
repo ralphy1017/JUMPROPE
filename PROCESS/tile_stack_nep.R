@@ -134,7 +134,10 @@ deep_stacker = function(input_args){
       extlist = 1,
       cores = input_args$cores_search
     )$FILTER
-    find_frames$MAGZERO_FIX = cal_sky_info$MAGZERO_FIX[cal_sky_info$full %in% find_frames$full]
+    ## [nep-miri] Match calibration values by filename, independent of finder order.
+    info_rows = match(find_frames$full, cal_sky_info$full)
+    if(anyNA(info_rows)) stop("Frame metadata missing from cal_sky_info")
+    find_frames$MAGZERO_FIX = cal_sky_info$MAGZERO_FIX[info_rows]
     
   }else{
     ## Pull the files form the stack_patch directory
@@ -386,6 +389,7 @@ deep_stacker = function(input_args){
         magzero_in = magzero_list[tweak_idx], ## Use appropriate magzero ins
         magzero_out = input_args$magzero_out,
         direction="backward",
+        interpolation=Sys.getenv("JUMPROPE_INTERPOLATION", "cubic"), ## [nep-miri] explicit, QA-tested kernel
         dump_frames = T,
         dump_dir = paste0(dump_dir, "/", input_args$super_name, "/", grid_size, "/", UNIQUE_FILTERS[i], "/"),
         multitype = "cluster",
