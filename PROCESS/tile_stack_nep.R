@@ -21,7 +21,8 @@ cmd = commandArgs(trailingOnly = TRUE)
 inst = cmd[1]; filt = cmd[2]; group = cmd[3]; label = cmd[4]
 root = Sys.getenv("JP_ROOT", "")  ## [nep-miri] no Mac default
 if(!nzchar(root)) stop("JP_ROOT is not set: source environment/env.sh or export it")
-g = jsonlite::fromJSON(paste0(root, "/grids/grid_", inst, ".json"))
+## [nep-miri] Each parallel stack can select its master/program grid and level.
+g = jsonlite::fromJSON(Sys.getenv("JUMPROPE_GRID_FILE", paste0(root, "/grids/grid_", inst, ".json")))
 grid_wcs = Rwcs_setkeyvalues(CRVAL1 = g$crval[1], CRVAL2 = g$crval[2], NAXIS1 = g$shape_xy[1], NAXIS2 = g$shape_xy[2],
   CRPIX1 = g$crpix_fits[1], CRPIX2 = g$crpix_fits[2], CTYPE1 = "RA---TAN", CTYPE2 = "DEC--TAN", CUNIT1 = "deg", CUNIT2 = "deg",
   CD1_1 = g$cd[1, 1], CD1_2 = 0, CD2_1 = 0, CD2_2 = g$cd[2, 2])
