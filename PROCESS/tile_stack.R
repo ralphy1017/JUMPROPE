@@ -324,13 +324,13 @@ deep_stacker = function(input_args){
         
         if(any(is.na(match_cat$bestmatch))){
           tweak_cat = list(par = c(0,0,0)) ## No matches => nothing to tweak on unfortunately...
-          twIDX = NA
+          twIDX = k ## [nep-miri] keep the frame with its pipeline WCS (it was dropped from the stack)
         }else{
           pix_cat = Rwcs_s2p(RA = ref_cat$RA, Dec = ref_cat$Dec, keyvalues = image_list[[k]]$keyvalues)
           propaneTweak_cat_ref = pix_cat[match_cat$bestmatch$refID, ]
           if( is.null(dim(propaneTweak_cat_ref)) ){
             tweak_cat = list(par = c(0,0,0))
-            twIDX = NA
+            twIDX = k ## [nep-miri] keep the frame untweaked
           }else{
             tweak_cat = propaneTweakCat(
               cat_ref = propaneTweak_cat_ref,
