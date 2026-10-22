@@ -1122,7 +1122,7 @@ do_cal_sky_info = function(input_args){
   
   cal_sky_info$MAGZERO_FIX = 0.0
   ## get most recent pmap
-  most_recent_pmap_ctx = max(unique(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", s)))
+  most_recent_pmap_ctx = max(unique(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", cal_sky_info$CRDS_CTX))) ## [nep-miri] was the undefined `s`
   
   for(i in 1:dim(cal_sky_info)[1]){
     #below is then Eqn [1] below
