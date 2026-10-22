@@ -40,21 +40,17 @@ def run1(input_data, rate_dir, cal_dir, files_bad_dir):
     os.makedirs(cal_dir, exist_ok=True)
 
     files = input_data
-    detector1 = calwebb_detector1.Detector1Pipeline()
-
-    ## EDIT THE CODE WITH THE JWST CALIBRATION OPTIONS HERE 
-    detector1.output_dir = rate_dir
-    detector1.jump.maximum_cores = args.max_cores
-    detector1.ramp_fit.maximum_cores = args.max_cores
-    # detector1.emicorr.skip = False ## Do the EMI banding correction for MIRI 
-
+    ## [nep-miri] .call() instead of instantiating and .run(): only .call() applies the CRDS parameter references
+    ## (pars-*), i.e. the instrument- and filter-specific defaults of the context: MIRI shower flagging at
+    ## F560W-F1500W and refpix skipped; NIRCam snowball expansion (expand_large_events) etc. Only the cores and the
+    ## (unneeded) Image2 resample are overridden.
     try:
-        run_output = detector1.run(files)
-        image2 = calwebb_image2.Image2Pipeline()
-        image2.output_dir = cal_dir
-        image2.save_results = True
-        image2.resample.skip = True  # we don't need to resample the cals, since they get drizzled later
-        image2.run(run_output)
+        run_output = calwebb_detector1.Detector1Pipeline.call(
+            files, output_dir=rate_dir, save_results=True,
+            steps={"jump": {"maximum_cores": args.max_cores}, "ramp_fit": {"maximum_cores": args.max_cores}})
+        calwebb_image2.Image2Pipeline.call(
+            run_output, output_dir=cal_dir, save_results=True,
+            steps={"resample": {"skip": True}})  # we don't need to resample the cals, since they get drizzled later
     except Exception as e:
         ## in case the uncal mucks up
         files_bad_stub = (files.split("UNCAL")[1].split("/"))[-1]
