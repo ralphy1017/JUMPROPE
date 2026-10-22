@@ -1,3 +1,12 @@
+## [nep-miri] jwst >= 3 writes DQ as uint32, which Rfits reads as integer64; "%% 2" on that is not a matrix
+## (profoundDilate: "Not a matrix."). Convert DQ to a numeric matrix before the bit tests.
+dq_numeric = function(m){
+  d = dim(m)
+  m = as.numeric(m)
+  dim(m) = d
+  return(m)
+}
+
 source(file.path(dirname(sys.frame(1)$ofile), "..", "config.R"))
 
 load_files = function(input_args, which_module, sky_info = NULL){
@@ -217,7 +226,7 @@ do_1of = function(input_args){
           }
         }
   
-        temp_mask = temp_image$DQ$imDat
+        temp_mask = dq_numeric(temp_image$DQ$imDat)
         JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
   
         temp_zap = profoundSkyScan(image = temp_image$SCI$imDat,
@@ -280,7 +289,7 @@ do_1of = function(input_args){
           }
         }
   
-        temp_mask = temp_image$DQ$imDat
+        temp_mask = dq_numeric(temp_image$DQ$imDat)
         JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
   
         if(nrow(temp_image$SCI$imDat) != 2048 | ncol(temp_image$SCI$imDat) != 2048){
@@ -383,7 +392,7 @@ do_cal_process = function(input_args, filelist = NULL){
     if( !(skip_completed_files & file.exists(file_sky)) ){
       #get cal data
       JWST_cal_image = Rfits_read_image(file_image, ext=2)
-      temp_mask = Rfits_read_image(file_image, ext=4, header = FALSE)
+      temp_mask = dq_numeric(Rfits_read_image(file_image, ext=4, header = FALSE))
       JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
       
       #basic info
@@ -1021,7 +1030,7 @@ do_modify_pedestal = function(input_args){
           temp_cal_sky = Rfits_read(cal_sky_info[i,'full'])
           ext_names = names(temp_cal_sky)
           
-          temp_mask = Rfits_read_image(cal_sky_info[i,'full'], ext = "DQ", header = F)
+          temp_mask = dq_numeric(Rfits_read_image(cal_sky_info[i,'full'], ext = "DQ", header = F))
           JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
           
           pro_current_sky = profoundProFound(temp_cal_sky$SCI[,]$imDat, mask=JWST_cal_mask, sky=0, box=683, redosky = FALSE)
@@ -1343,7 +1352,7 @@ do_gen_stack = function(input_args){
           for(k in 1:dim(input_info)[1]){
             temp_image = Rfits_read_image(input_info[k,'full'], ext=2)
             
-            temp_mask = Rfits_read_image(input_info[k,'full'], ext=4, header=FALSE)
+            temp_mask = dq_numeric(Rfits_read_image(input_info[k,'full'], ext=4, header=FALSE))
             
             temp_image = propaneBadPix(
               image = temp_image,
