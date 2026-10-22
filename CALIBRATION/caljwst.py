@@ -22,6 +22,7 @@ parser.add_argument('--RAD', type=float, nargs="?", help="Search radius (deg)", 
 parser.add_argument('--VISITID', type=str, help="VISIT ID (e.g., 2736 for SMACS)", default = None)
 parser.add_argument("--redo",type=bool,help="Should we redo the calibration even if files exist?",default=False)
 parser.add_argument("--max_cores", help="How many cores. Must be written as e.g., 'half', 'quarter' or 'all'", default="half")
+parser.add_argument("--nproc", type=int, help="[nep-miri] uncal files calibrated in parallel, each with --max_cores", default=1)
 args = parser.parse_args()
 
 def run1(input_data, rate_dir, cal_dir, files_bad_dir):
@@ -112,7 +113,8 @@ def cal(ref_dir, ra, dec, rad, visitid):
         uncal_dir + "*info.csv"
     )
     print(uncal_dir)
-    df = pd.concat((pd.read_csv(f) for f in info_tables), ignore_index=True)
+    ## [nep-miri] VISITID downloads write <pid>_UNCAL.csv, not *info.csv: only compare when a cone-search table exists
+    df = pd.concat((pd.read_csv(f) for f in info_tables), ignore_index=True) if info_tables else pd.DataFrame()
 
     if (len(df) > len(files)):
         print("Some files appear to be missing in this region \n compared to what was downloaded with cone-search.")
@@ -138,8 +140,14 @@ def cal(ref_dir, ra, dec, rad, visitid):
     print("Running " + str(len(files_redo)) + " files")
 
     if len(files_redo) > 0:
-        for i, ff in enumerate(files_redo):
-            run1(ff, rate_dir_redo[i], cal_dir_redo[i], files_bad_dir)
+        if args.nproc > 1:  ## [nep-miri] calibrate several files at once (spawned workers re-import jwst)
+            import multiprocessing as mp
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(args.nproc, mp_context=mp.get_context('spawn')) as pool:
+                list(pool.map(run1, files_redo, rate_dir_redo, cal_dir_redo, [files_bad_dir] * len(files_redo)))
+        else:
+            for i, ff in enumerate(files_redo):
+                run1(ff, rate_dir_redo[i], cal_dir_redo[i], files_bad_dir)
     else:
         exit()
 
