@@ -3,26 +3,28 @@
 ## The mosaics of an instrument share one grid (make_grids.py), so the detection image is the inverse-variance weighted
 ## stack of all filters of a set. The detection segmentation map is then measured in every filter (redosegim dilation,
 ## as in JumProPe). Star masks are not applied: the MIRI area has few bright Gaia stars.
-## Usage: Rscript profound_nep.R <miri|nircam> <program id | all>
-## Writes ~/JP/PRO/ProFound_NEP/<inst>_<prog>/: detect_segim.fits, cat_detect.csv, cat_<FILT>.csv and cat_multiband.csv.
+## Usage: Rscript profound_nep.R <miri|nircam> <mosaic label, e.g. 6616 | all>     (root = $JP_ROOT, default ~/JP)
+## Reads <root>/PRO/Mosaic_Stacks/Patch/patch_<INST>_<label>_<FILT>.fits (run_mosaics.py).
+## Writes <root>/PRO/ProFound/<inst>_<label>/: detect_segim.fits, cat_detect.csv, cat_<FILT>.csv and cat_multiband.csv.
 setwd("/Users/ralphy/Work/research/codes/JUMPROPE/PROFOUND")
 suppressMessages({library(Rfits); library(Rwcs); library(ProFound); library(data.table); library(magicaxis)})
 source("ProFound_settings.R")
 
 cmd = commandArgs(trailingOnly = TRUE)
 inst = cmd[1]; prog = cmd[2]
-tag = paste0("NEP", toupper(inst), prog)
-pdir = "/Users/ralphy/JP/PRO/Mosaic_Stacks/Patch"
+root = Sys.getenv("JP_ROOT", "/Users/ralphy/JP")
+tag = paste0(toupper(inst), "_", prog)
+pdir = paste0(root, "/PRO/Mosaic_Stacks/Patch")
 files = list.files(pdir, pattern = paste0("^patch_", tag, "_F.*\\.fits$"), full.names = TRUE)
 if(prog == "all"){
-  ## filters observed by one program only have no "all" mosaic: use that program's mosaic (same global grid)
-  every = list.files(pdir, pattern = paste0("^patch_NEP", toupper(inst), "[0-9]+_F.*\\.fits$"), full.names = TRUE)
+  ## filters observed by one group only have no "all" mosaic: use that group's mosaic (same global grid)
+  every = list.files(pdir, pattern = paste0("^patch_", toupper(inst), "_[^_]+_F.*\\.fits$"), full.names = TRUE)
   have = sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", files)
   extra = every[!(sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", every) %in% have)]
   files = c(files, extra[!duplicated(sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", extra))])
 }
 filts = sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", files)
-out = paste0("/Users/ralphy/JP/PRO/ProFound_NEP/", inst, "_", prog, "/")
+out = paste0(root, "/PRO/ProFound/", inst, "_", prog, "/")
 dir.create(out, recursive = TRUE, showWarnings = FALSE)
 message(tag, ": ", paste(filts, collapse = " "))
 
@@ -69,4 +71,4 @@ for(i in seq_along(files)){
   message(filts[i], " measured")
 }
 fwrite(multi, paste0(out, "cat_multiband.csv"))
-message("PROFOUND_NEP_DONE ", tag, " ", nrow(multi), " sources")
+message("PROFOUND_DONE ", tag, " ", nrow(multi), " sources")
