@@ -1612,7 +1612,9 @@ do_wisp_rem = function(input_args){
     registerDoParallel(cl)
   }
   
-  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"))%dopar%{
+  ## [nep-miri] Fresh PSOCK workers do not inherit global wispFixer. Export it
+  ## explicitly and surface errors instead of silently accepting partial files.
+  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "stop", .export = "wispFixer", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"))%dopar%{
     if(idx_wisp_skip[ii]){
       ## copy original data to directory where we keep the wisps
       vid = paste0(info_wisp$VISIT_ID[ii])
