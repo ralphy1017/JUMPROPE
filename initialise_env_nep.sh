@@ -2,7 +2,7 @@
 ## (FITS keywords are limited to 80 characters). Usage: source initialise_env_nep.sh; export JUMPROPE_do_MIRI=T|F
 export JUMPROPE_MAST_TOKEN=9999
 export JUMPROPE_DOWNLOAD_DIR='/Users/ralphy/JP/RAW'
-export JUMPROPE_RAW_DIR='/Users/ralphy/JP/RAW'
+export JUMPROPE_RAW_DIR='/Users/ralphy/JP/CAL'   ## only *_cal.fits (links), since load_raw_files() takes every .fits recursively
 export JUMPROPE_REF_DIR='/Users/ralphy/JP/PRO'
 export JUMPROPE_CRDS_PATH='/Users/ralphy/crds_cache'
 export JUMPROPE_CRDS_CONTEXT='jwst_1584.pmap'   ## operational context on 2026-10-21 (crds.client.get_default_context)
