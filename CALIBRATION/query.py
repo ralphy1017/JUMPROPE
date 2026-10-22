@@ -202,7 +202,7 @@ def main(args_dict):
         print("Please set ENV variables. ")
         exit()
 
-    if JUMPROPE_MAST_TOKEN is not None:
+    if JUMPROPE_MAST_TOKEN not in (None, "", "9999"):  ## [nep-miri] public data need no login; 9999 is the placeholder
         ## Used for proprietary data, not a requirement for JP
         my_session = Observations.login(token=str(JUMPROPE_MAST_TOKEN))
 
