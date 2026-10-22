@@ -22,6 +22,7 @@ parser.add_argument('--RAD', type=float, nargs="?", help="Search radius (deg)", 
 parser.add_argument('--VISITID', type=str, help="VISIT ID (e.g., 2736 for SMACS)", default = None)
 parser.add_argument("--redo",type=bool,help="Should we redo the calibration even if files exist?",default=False)
 parser.add_argument("--max_cores", help="How many cores. Must be written as e.g., 'half', 'quarter' or 'all'", default="half")
+parser.add_argument("--match", type=str, help="[nep-miri] only calibrate uncal files whose name contains this (e.g. _mirimage_, _nrc)", default="")
 parser.add_argument("--nproc", type=int, help="[nep-miri] uncal files calibrated in parallel, each with --max_cores", default=1)
 args = parser.parse_args()
 
@@ -84,6 +85,7 @@ def cal(ref_dir, ra, dec, rad, visitid):
     os.makedirs(files_bad_dir, exist_ok=True) ## in case uncal files are corrupted
 
     files = glob.glob(uncal_dir + "/**/*fits", recursive = True)
+    files = [f for f in files if args.match in os.path.basename(f)]  ## [nep-miri] --match
     uncal_files = [foo.split("_uncal")[0].split("/")[-1] for foo in files]
 
     rate_dir = []
