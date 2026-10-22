@@ -1552,6 +1552,13 @@ do_wisp_rem = function(input_args){
   
   cat('Processing',dim(info_wisp)[1],'files\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
+
+  ## [nep-miri] LW-only selections have no eligible wisp detectors. Do not
+  ## evaluate sapply(character(0)) as a logical vector or enter a 1:0 loop.
+  if(nrow(info_wisp) == 0L){
+    message("No short-wavelength detectors require wisp removal")
+    return(invisible(NULL))
+  }
   
   idx_wisp_skip = !(unname(sapply( info_wisp$full, function(x){any(na.omit(Rfits_extnames(x)) == "SCI_ORIG")} )) & skip_completed_files)
   
