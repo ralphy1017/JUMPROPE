@@ -12,7 +12,15 @@ source("ProFound_settings.R")
 cmd = commandArgs(trailingOnly = TRUE)
 inst = cmd[1]; prog = cmd[2]
 tag = paste0("NEP", toupper(inst), prog)
-files = list.files("/Users/ralphy/JP/PRO/Mosaic_Stacks/Patch", pattern = paste0("^patch_", tag, "_F.*\\.fits$"), full.names = TRUE)
+pdir = "/Users/ralphy/JP/PRO/Mosaic_Stacks/Patch"
+files = list.files(pdir, pattern = paste0("^patch_", tag, "_F.*\\.fits$"), full.names = TRUE)
+if(prog == "all"){
+  ## filters observed by one program only have no "all" mosaic: use that program's mosaic (same global grid)
+  every = list.files(pdir, pattern = paste0("^patch_NEP", toupper(inst), "[0-9]+_F.*\\.fits$"), full.names = TRUE)
+  have = sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", files)
+  extra = every[!(sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", every) %in% have)]
+  files = c(files, extra[!duplicated(sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", extra))])
+}
 filts = sub(".*_(F[0-9]+[WMN])\\.fits$", "\\1", files)
 out = paste0("/Users/ralphy/JP/PRO/ProFound_NEP/", inst, "_", prog, "/")
 dir.create(out, recursive = TRUE, showWarnings = FALSE)
