@@ -23,6 +23,8 @@ root = Sys.getenv("JP_ROOT", "")  ## [nep-miri] no Mac default
 if(!nzchar(root)) stop("JP_ROOT is not set: source environment/env.sh or export it")
 ## [nep-miri] Each parallel stack can select its master/program grid and level.
 g = jsonlite::fromJSON(Sys.getenv("JUMPROPE_GRID_FILE", paste0(root, "/grids/grid_", inst, ".json")))
+med_chunk = 1000L ## [nep-miri] ProPane's median stack refuses a 1-pixel last chunk (2738 grid: 30001 px); largest safe size <= 1000
+while (any(as.integer(g$shape_xy) %% med_chunk == 1L)) med_chunk = med_chunk - 1L
 grid_wcs = Rwcs_setkeyvalues(CRVAL1 = g$crval[1], CRVAL2 = g$crval[2], NAXIS1 = g$shape_xy[1], NAXIS2 = g$shape_xy[2],
   CRPIX1 = g$crpix_fits[1], CRPIX2 = g$crpix_fits[2], CTYPE1 = "RA---TAN", CTYPE2 = "DEC--TAN", CUNIT1 = "deg", CUNIT2 = "deg",
   CD1_1 = g$cd[1, 1], CD1_2 = 0, CD2_1 = 0, CD2_2 = g$cd[2, 2])
@@ -226,7 +228,7 @@ deep_stacker = function(input_args){
     ref_cat = input_args$ref_cat
     
     UNIQUE_FILTERS = unique(stack_grid$FILTER)
-    UNIQUE_FILTERS = UNIQUE_FILTERS[!grepl("CLEAR", UNIQUE_FILTERS) & UNIQUE_FILTERS %in% file_info$FILT]
+    UNIQUE_FILTERS = UNIQUE_FILTERS[(!grepl("CLEAR", UNIQUE_FILTERS) | Sys.getenv("JUMPROPE_ALLOW_CLEAR") == "T") & UNIQUE_FILTERS %in% file_info$FILT] ## [nep-miri] NIRISS F090W-F200W have FILTER=CLEAR (band in PUPIL)
     
     count = TRUE
     for(i in which(grepl(input_args$FILT, UNIQUE_FILTERS))){
@@ -410,7 +412,8 @@ deep_stacker = function(input_args){
         pattern = glob2rx("*image*.fits"),
         keyvalues_out = deep_frame$image$keyvalues, 
         cores = cores, 
-        multitype = "cluster"
+        multitype = "cluster",
+        chunk = med_chunk ## [nep-miri]
       )
       
       Rfits_write(
