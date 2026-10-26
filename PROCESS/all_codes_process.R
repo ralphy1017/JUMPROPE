@@ -1526,7 +1526,20 @@ do_wisp_rem = function(input_args){
   
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = additional_params$parallel_type
-  
+  ## [nep-miri] wispFixer settings from JUMPROPE_WISP_PARAMS (JSON: source_threshold, scale_threshold, sky_threshold,
+  ## clip_threshold, sigma_hi, sigma_lo). Unset keeps Jordan's defaults and SIGMA_LO.
+  wisp_params = additional_params$wisp_params
+  if(is.null(wisp_params) && nzchar(Sys.getenv("JUMPROPE_WISP_PARAMS"))){
+    wisp_params = jsonlite::fromJSON(Sys.getenv("JUMPROPE_WISP_PARAMS"))
+  }
+  if(!is.null(wisp_params$sigma_lo)){
+    SIGMA_LO = wisp_params$sigma_lo
+  }
+  wisp_args = wisp_params[setdiff(names(wisp_params), "sigma_lo")]
+  if(length(wisp_args)){
+    message("wispFixer settings: ", paste(names(wisp_args), unlist(wisp_args), sep = "=", collapse = ", "))
+  }
+
   if(is.null(SIGMA_LO)){
     message("No smoothing on wisp removal")
   }else{
@@ -1655,7 +1668,7 @@ do_wisp_rem = function(input_args){
         }
         poly = NULL    
         
-        wisp_fix = wispFixer(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo)
+        wisp_fix = do.call(wispFixer, c(list(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo), wisp_args))
         Rfits_write_pix(data = wisp_fix$wisp_fix$imDat, filename = info_wisp$full[ii], ext = 2)
         
         check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
@@ -2079,6 +2092,7 @@ wispFixer = function(wisp_im, ref_im,
     #Step 8
     sel = which(is.na(wisp_template) | wisp_template_lo > wisp_template)
     wisp_template[sel] = wisp_template_lo[sel]
+    wisp_template[is.na(wisp_template)] = 0 ## [nep-miri] never blank frame pixels where the low-pass is also NA
   }else{
     wisp_template[is.na(wisp_template)] = 0
   }

@@ -43,3 +43,20 @@ notebook sets it only when all of a run's CLEAR frames share one pupil, so bands
 `propaneStackWarpMed` stops when a grid dimension modulo its chunk (default 1000) is 1. The nircam-nep-v2 2738 grid is
 30112 × 30001, so 11 of 12 NIRCam ProPane mosaics failed after their 20-minute inverse-variance stack. The chunk is now the
 largest size ≤ 1000 that leaves no 1-pixel remainder in either dimension, taken from the grid JSON.
+
+## [nep-miri] all_codes_process.R: wispFixer settings from the notebook, 2026-10-25
+`do_wisp_rem` reads `JUMPROPE_WISP_PARAMS`, a JSON object with keys `source_threshold`, `scale_threshold`,
+`sky_threshold`, `clip_threshold`, `sigma_hi` and `sigma_lo`, and passes them to `wispFixer`. When it is unset,
+Jordan's defaults and `SIGMA_LO` apply, so default behaviour is unchanged.
+
+With `sigma_lo`, a template pixel that is still NA after the low-pass fill becomes 0, so it can never blank a frame pixel.
+
+**Why.** The NEP notebook sets `sky_threshold` .4, `sigma_hi` 4 and `sigma_lo` 40 for NIRCam and keeps Jordan's
+other defaults (2026-10-26). On 8 B3/B4 frames, `SIGMA_LO` NULL left a speckled, positive-only template with holes
+under sources, which leave halos in the wisp; `sigma_lo` 40 removes both. In a 324-set grid around the defaults, sky .4
+with `sigma_hi` 4 cut the wisp left after this step from 0.28σ to 0.09σ without taking more source flux (parent
+project `CONTEXT.md`). The extra NA-safe line changes nothing on those frames: the patched `wispFixer`
+reproduces the parent project's sigma_lo test templates to 4e-9.
+
+A source-mask option (`src_mask`) for a lower `scale_threshold` was added and then removed the same day: that setting
+took more SW flux from faint blue sources (parent project `CONTEXT.md`).
