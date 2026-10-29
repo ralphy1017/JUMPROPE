@@ -1,6 +1,6 @@
 # JumProPe `nep-miri` change ledger
 
-Base `main`: `9e7af86`. Validated branch HEAD `7f3d2b3`, pushed to `ralphy1017/JUMPROPE` `nep-miri`. Changes are marked `[nep-miri]` in code. The parent project's [reduction reference](../../JUMPROPE.md) gives usage and QA; [vendor provenance](../../vendor/VENDOR.md) covers the separately installed ProPane patch.
+Base `main`: `9e7af86`. Stable release `stable-2026-10-29` contains the `nep-miri` fixes through `bb316e1` and the user-selected narrow-wisp profile below, published on `ralphy1017/JUMPROPE` `main` and `nep-miri`. Changes are marked `[nep-miri]` in code. The parent project's [reduction reference](../../JUMPROPE.md) gives usage and QA; [vendor provenance](../../vendor/VENDOR.md) covers the separately installed ProPane patch.
 
 ## Inherited NEP fixes present at the base commit
 
@@ -30,7 +30,7 @@ Base `main`: `9e7af86`. Validated branch HEAD `7f3d2b3`, pushed to `ralphy1017/J
 | `54b2373` | Export `wispFixer` into fresh PSOCK workers and surface worker errors. |
 | `7f3d2b3` | Require `SCI_ORIG`, `REF_WISP_WARP` and `WISP_TEMPLATE` before skipping wisp work; restore original SCI before retry, retain indexing and clean up worker pools. |
 
-The first inherited DQ option still defaulted to 3; commit `236b6a4` changed the actual defaults to 1. The PSOCK bug previously left wisps in F200W while `SCI_ORIG` alone looked like success. Normal production wisp parameters remain unchanged. Use working copies to protect original calibrated FITS, and verify source flux and residual structure.
+The first inherited DQ option still defaulted to 3; commit `236b6a4` changed the actual defaults to 1. The PSOCK bug previously left wisps in F200W while `SCI_ORIG` alone looked like success. Use working copies to protect original calibrated FITS, and verify source flux and residual structure. The stable wisp parameters were updated on 2026-10-29 as recorded below.
 
 Main entry points: `CALIBRATION/caljwst.py` (calibration), `PROCESS/run_all_process.R` (1/f, sky and wisp stages), `PROCESS/tile_stack_nep.R <instrument> <filter> <visit-regex> <label>` (ProPane on an explicit grid), `PROFOUND/profound_nep.R <instrument> <label>` (independent catalog). The parent project sets the environment and invokes them; use its CLI for a full campaign.
 
@@ -60,3 +60,13 @@ reproduces the parent project's sigma_lo test templates to 4e-9.
 
 A source-mask option (`src_mask`) for a lower `scale_threshold` was added and then removed the same day: that setting
 took more SW flux from faint blue sources (parent project `CONTEXT.md`).
+
+## [nep-miri] Stable no-clipping narrow-wisp profile, 2026-10-29
+
+After reviewing all 28 program 12529 F200W A3/A4/B3/B4 frames (120 parameter settings per exposure) and eight additional examples, the user selected `sky_threshold=.4`, `source_threshold=.95`, `scale_threshold=.95`, `clip_threshold=1`, `sigma_hi=.5`, `sigma_lo=NULL` as the stable defaults. No calibrated inputs or mosaics are reprocessed by this release.
+
+`clip_threshold=1` explicitly bypasses positive/negative quantile clipping; on the tested frames it is identical to the earlier min/max quantile implementation. `do_wisp_rem` now distinguishes a missing `sigma_lo` option from a named R NULL/JSON null, so an explicit null overrides even a legacy `SIGMA_LO=40`. Explicit numeric overrides and omitted-option legacy behavior remain available.
+
+Validation: `tests/test_wisp_defaults.R` covers actual driver R/JSON option resolution, stable defaults, unclipped-peak behavior and subtraction identity. A cached-warp release comparison verifies the default template against the selected `c1_h0p5_lNone` model on all 28 frames, without calibration, alignment or mosaic reruns. The scientific study and examples are in the parent project's `diagnostics/wisp-12529-all-grid-20261028/`.
+
+This selection does not establish source-flux preservation or artifact-free mosaics. The previous compact SW-only injection stress test recovered about 19% at this profile; resolved/diffuse stress cohorts also lost flux. These sources are absent from the LW reference, so this is not a measured bias for every real galaxy. Diffraction spikes remain astronomical source structure to preserve. The stable designation records the user's code/profile choice and retains these measured limitations.

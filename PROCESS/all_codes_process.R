@@ -1527,13 +1527,15 @@ do_wisp_rem = function(input_args){
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = additional_params$parallel_type
   ## [nep-miri] wispFixer settings from JUMPROPE_WISP_PARAMS (JSON: source_threshold, scale_threshold, sky_threshold,
-  ## clip_threshold, sigma_hi, sigma_lo). Unset keeps Jordan's defaults and SIGMA_LO.
+  ## clip_threshold, sigma_hi, sigma_lo). Unset uses the stable wispFixer defaults and SIGMA_LO.
   wisp_params = additional_params$wisp_params
   if(is.null(wisp_params) && nzchar(Sys.getenv("JUMPROPE_WISP_PARAMS"))){
     wisp_params = jsonlite::fromJSON(Sys.getenv("JUMPROPE_WISP_PARAMS"))
   }
-  if(!is.null(wisp_params$sigma_lo)){
-    SIGMA_LO = wisp_params$sigma_lo
+  ## [nep-miri] A named JSON null/R NULL explicitly disables the low-pass floor,
+  ## even if the caller supplied a legacy non-NULL SIGMA_LO.
+  if("sigma_lo" %in% names(wisp_params)){
+    SIGMA_LO = wisp_params[["sigma_lo"]]
   }
   wisp_args = wisp_params[setdiff(names(wisp_params), "sigma_lo")]
   if(length(wisp_args)){
@@ -1541,9 +1543,9 @@ do_wisp_rem = function(input_args){
   }
 
   if(is.null(SIGMA_LO)){
-    message("No smoothing on wisp removal")
+    message("No low-pass floor on wisp removal (sigma_lo=NULL)")
   }else{
-    message(paste0("Using smoothing kernel SIGMA_LO = ", SIGMA_LO))
+    message(paste0("Using low-pass floor SIGMA_LO = ", SIGMA_LO))
   }
   
   filelist = load_files(input_args, which_module = "wisp_rem")
@@ -2031,10 +2033,10 @@ do_wisp_reverse = function(input_args){
 wispFixer = function(wisp_im, ref_im,
                      source_threshold=0.95, #Threshold on reference image for definitely real sources
                      scale_threshold=0.95, #When considering the +ve ratio map pixels, quantile to define very blue things
-                     sky_threshold=0.5, #Safe threshold to find the correct sky level
-                     clip_threshold=0.997, #We avoid very bright pixels in the wisp template
-                     sigma_hi=2,
-                     sigma_lo=20,
+                     sky_threshold=0.4, # [nep-miri] User-selected stable profile, 2026-10-29
+                     clip_threshold=1, # [nep-miri] 1 disables bright-tail clipping
+                     sigma_hi=0.5,
+                     sigma_lo=NULL,
                      poly=NULL,
                      cores=1){
   
@@ -2075,8 +2077,11 @@ wispFixer = function(wisp_im, ref_im,
   wisp_template = wisp_im$imDat - ref_im_warp$imDat*scale
   
   #Step 4
-  wisp_template[wisp_template > quantile(wisp_template[wisp_template > 0], clip_threshold, na.rm=T)] = NA
-  wisp_template[wisp_template < quantile(wisp_template[wisp_template < 0], 1 - clip_threshold, na.rm=T)] = NA
+  ## [nep-miri] No clipping at 1; avoid quantiles of an empty positive/negative tail.
+  if(clip_threshold < 1){
+    wisp_template[wisp_template > quantile(wisp_template[wisp_template > 0], clip_threshold, na.rm=T)] = NA
+    wisp_template[wisp_template < quantile(wisp_template[wisp_template < 0], 1 - clip_threshold, na.rm=T)] = NA
+  }
   
   #Step 5
   wisp_template = profoundImBlur(wisp_template, sigma=sigma_hi)
