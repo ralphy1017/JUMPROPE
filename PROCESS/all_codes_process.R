@@ -298,8 +298,10 @@ do_1of = function(input_args){
           scan_block = c(512, 2048)
         }
   
+        protected_sources = matrix(FALSE, nrow(temp_image$SCI$imDat), ncol(temp_image$SCI$imDat))
+        if(!is.null(temp_image$WISP_SOURCE_MASK)) protected_sources = temp_image$WISP_SOURCE_MASK$imDat != 0
         temp_zap = profoundSkyScan(image = temp_image$SCI$imDat,
-                                   mask = (temp_image$SCI$imDat==0) | JWST_cal_mask | is.na(temp_image$SCI$imDat),
+                                   mask = (temp_image$SCI$imDat==0) | JWST_cal_mask | is.na(temp_image$SCI$imDat) | protected_sources,
                                    clip = c(0.0,0.9),
                                    scan_block = scan_block,
                                    trend_block = trend_block,
@@ -392,6 +394,11 @@ do_cal_process = function(input_args, filelist = NULL){
       temp_mask = dq_numeric(Rfits_read_image(file_image, ext=4, header = FALSE))
       JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
       
+      ## [nep-miri] Carry deep source protection into sky estimation, not DQ.
+      source_ext = Rfits_extname_to_ext(file_image, "WISP_SOURCE_MASK")
+      protected_sources = matrix(FALSE, nrow(JWST_cal_image$imDat), ncol(JWST_cal_image$imDat))
+      if(!is.na(source_ext)) protected_sources = Rfits_read_image(file_image, ext=source_ext, header=FALSE) != 0
+      sky_fit_mask = JWST_cal_mask | protected_sources
       #basic info
       suppressMessages({ #do not really want to see lots of SIP warnings!
         RA_im = centre(JWST_cal_image)[1]
@@ -447,7 +454,7 @@ do_cal_process = function(input_args, filelist = NULL){
         )
       }
       
-      pro_out = pro_func(list(image = JWST_cal_image$imDat, mask = JWST_cal_mask, box = box, redoskysize = redoskysize))
+      pro_out = pro_func(list(image = JWST_cal_image$imDat, mask = sky_fit_mask, box = box, redoskysize = redoskysize))
       pro = pro_out$pro
       redoskysize = pro_out$redoskysize
       
@@ -478,8 +485,8 @@ do_cal_process = function(input_args, filelist = NULL){
         sky_redo = list(sky = pro$sky)
         pro_redo = pro
       }else{
-        sky_redo = sky_redo_func(list(image = JWST_cal_image$imDat, pro = pro, mask = JWST_cal_mask, sky_poly_deg = sky_poly_deg))
-        pro_redo = profoundProFound(JWST_cal_image$imDat, mask=JWST_cal_mask, skycut=2, pixcut=5, box=box, grid = box, redoskysize=redoskysize, sky=sky_redo$sky, redosky=FALSE, tolerance=Inf)
+        sky_redo = sky_redo_func(list(image = JWST_cal_image$imDat, pro = pro, mask = sky_fit_mask, sky_poly_deg = sky_poly_deg))
+        pro_redo = profoundProFound(JWST_cal_image$imDat, mask=sky_fit_mask, skycut=2, pixcut=5, box=box, grid = box, redoskysize=redoskysize, sky=sky_redo$sky, redosky=FALSE, tolerance=Inf)
       }
       
       if(is.null(sky_redo$sky)){
@@ -517,6 +524,7 @@ do_cal_process = function(input_args, filelist = NULL){
       #   pro_redo$objects_redo = pro_redo$objects ## polynomial skies way below RMS of the true sky, whole frame is objects. Open clusters for example...
       # }
       
+      pro_redo$objects_redo = (pro_redo$objects_redo != 0) | protected_sources
       sky_med = median(sky_redo$sky[JWST_cal_mask == 0 & pro_redo$objects_redo == 0], na.rm=TRUE)
       skyRMS_med = median(pro_redo$skyRMS[JWST_cal_mask == 0 & pro_redo$objects_redo == 0], na.rm=TRUE)
       
@@ -1030,6 +1038,9 @@ do_modify_pedestal = function(input_args){
           temp_mask = dq_numeric(Rfits_read_image(cal_sky_info[i,'full'], ext = "DQ", header = F))
           JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
           
+          ## [nep-miri] Protect the same source outskirts in the pedestal check.
+          if(!is.null(temp_cal_sky$WISP_SOURCE_MASK))
+            JWST_cal_mask = JWST_cal_mask | (temp_cal_sky$WISP_SOURCE_MASK[,]$imDat != 0)
           pro_current_sky = profoundProFound(temp_cal_sky$SCI[,]$imDat, mask=JWST_cal_mask, sky=0, box=683, redosky = FALSE)
           
           if(is.null(pro_current_sky$skyChiSq)){
@@ -1537,12 +1548,23 @@ do_wisp_rem = function(input_args){
   if("sigma_lo" %in% names(wisp_params)){
     SIGMA_LO = wisp_params[["sigma_lo"]]
   }
-  wisp_args = wisp_params[setdiff(names(wisp_params), "sigma_lo")]
+  ## [nep-miri] Optional JADES template estimator within the existing wisp stage.
+  wisp_method = if(is.null(wisp_params$method)) "dynamic" else wisp_params$method
+  stopifnot(wisp_method %in% c("dynamic", "nmf", "masked_dynamic", "continuous_dynamic"))
+  wisp_args = wisp_params[setdiff(names(wisp_params), c("sigma_lo", "method"))]
+  nmf_script = file.path(Sys.getenv("JUMPROPE_DIR", ".."), "PROCESS", "wisp_nmf.py")
+  nmf_python = Sys.getenv("JUMPROPE_PYTHON", "python3")
+  if(wisp_method %in% c("nmf", "masked_dynamic", "continuous_dynamic")) {
+    stopifnot(file.exists(nmf_script), dir.exists(wisp_params$template_dir))
+  }
   if(length(wisp_args)){
-    message("wispFixer settings: ", paste(names(wisp_args), unlist(wisp_args), sep = "=", collapse = ", "))
+    message("wispFixer settings: ", jsonlite::toJSON(wisp_args, auto_unbox=TRUE, null="null", digits=NA))
   }
 
-  if(is.null(SIGMA_LO)){
+  if(wisp_method == "continuous_dynamic") {
+    message("Signed residual components: sigma_hi=", wisp_params$sigma_hi,
+            ", sigma_lo=", SIGMA_LO, "; no positive-only floor")
+  }else if(is.null(SIGMA_LO)){
     message("No low-pass floor on wisp removal (sigma_lo=NULL)")
   }else{
     message(paste0("Using low-pass floor SIGMA_LO = ", SIGMA_LO))
@@ -1578,7 +1600,10 @@ do_wisp_rem = function(input_args){
   ## [nep-miri] SCI_ORIG is saved before fitting and survives failed workers.
   ## Require every successful-stage diagnostic, not the backup alone.
   complete = vapply(info_wisp$full, function(x){
-    all(c("SCI_ORIG", "REF_WISP_WARP", "WISP_TEMPLATE") %in% na.omit(Rfits_extnames(x)))
+    required = c("SCI_ORIG", "REF_WISP_WARP", "WISP_TEMPLATE")
+    if(wisp_method %in% c("nmf", "masked_dynamic", "continuous_dynamic")) required = c(required, "WISP_SOURCE_MASK", "WISP_ERR")
+    # Template settings must be re-evaluated; notebook input keys handle reuse.
+    all(required %in% na.omit(Rfits_extnames(x))) && wisp_method == "dynamic"
   }, logical(1))
   idx_wisp_skip = !(complete & skip_completed_files)
   
@@ -1670,7 +1695,65 @@ do_wisp_rem = function(input_args){
         }
         poly = NULL    
         
-        wisp_fix = do.call(wispFixer, c(list(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo), wisp_args))
+        if(wisp_method %in% c("nmf", "masked_dynamic", "continuous_dynamic")) {
+          ## Warp LW only for source detection; no global colour subtraction.
+          ref_warp = propaneWarp(ref_im, keyvalues_out=wisp_frame$keyvalues, cores=1, direction="forward")
+          ref_warp = propaneTweakImage(image_ref=wisp_frame[,], image_pre_fix=ref_warp[,],
+            delta_max=c(2,0.1), quan_cut=c(.995,.9999), shift_int=FALSE,
+            quick=TRUE, verbose=FALSE, cores=1)$image_post_fix
+          scratch = tempfile("wisp-nmf-")
+          dir.create(scratch)
+          ref_path = file.path(scratch, "reference.fits")
+          model_path = file.path(scratch, "model.fits")
+          options_path = file.path(scratch, "options.json")
+          Rfits_write_image(ref_warp, filename=ref_path)
+          jsonlite::write_json(wisp_params, options_path, auto_unbox=TRUE, null="null", digits=NA)
+          status = system2(nmf_python, shQuote(c(nmf_script, "--input", info_wisp$full[ii],
+             "--reference", ref_path, "--output", model_path, "--options", options_path)))
+          if(status != 0 || !file.exists(model_path)) stop("NMF wisp fit failed: ", info_wisp$full[ii])
+          model = Rfits_read_image(model_path, ext="WISP_TEMPLATE", header=FALSE)
+          corrected = wisp_frame
+          corrected$imDat = wisp_frame$imDat-model
+          wisp_fix = list(wisp_fix=corrected, ref_im_warp=ref_warp, wisp_template=model)
+          if(wisp_method == "masked_dynamic") {
+            protected = Rfits_read_image(model_path, ext="WISP_SOURCE_MASK", header=FALSE) != 0
+            native_args = wisp_params[intersect(names(wisp_params),
+              c("source_threshold", "scale_threshold", "sky_threshold", "clip_threshold", "sigma_hi"))]
+            wisp_fix = do.call(wispFixer, c(list(wisp_im=wisp_frame, ref_im=ref_warp,
+              ref_is_warped=TRUE, source_mask=protected, source_fill=model, sigma_lo=SIGMA_LO), native_args))
+          }
+          for(extname in c("WISP_SOURCE_MASK", "WISP_ERR", "WISP_FIT_MASK", "WISP_FIT_1F")) {
+            plane = Rfits_read_image(model_path, ext=extname, header=FALSE)
+            extloc = Rfits_extname_to_ext(info_wisp$full[ii], extname)
+            if(is.na(extloc)) {
+              n = Rfits_nhdu(info_wisp$full[ii])
+              Rfits_write_image(plane, filename=info_wisp$full[ii], create_file=FALSE)
+              Rfits_write_key(info_wisp$full[ii], ext=n+1, keyname="EXTNAME", keyvalue=extname)
+            } else Rfits_write_pix(plane, info_wisp$full[ii], ext=extloc)
+          }
+          Rfits_write_key(info_wisp$full[ii], ext=2, keyname="WISPMETH", keyvalue=toupper(wisp_method))
+          meta = jsonlite::fromJSON(paste0(model_path, ".json"), simplifyVector=FALSE)
+          meta$method = wisp_method
+          if(wisp_method == "continuous_dynamic") {
+            meta$uncertainty_scope = "WISP_ERR describes the independent prior; residual-template uncertainty is not fully propagated"
+          }
+          if(wisp_method == "masked_dynamic") {
+            meta$dynamic_parameters = c(native_args, list(sigma_lo=SIGMA_LO))
+            meta$uncertainty_scope = "WISP_ERR describes the independent prior only, not the dynamic residual model"
+          }
+          jsonlite::write_json(meta, paste0(info_wisp$full[ii], ".wisp.json"), auto_unbox=TRUE, pretty=TRUE, digits=NA)
+          unlink(scratch, recursive=TRUE)
+        } else {
+          wisp_fix = do.call(wispFixer, c(list(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo), wisp_args))
+        }
+        ## [nep-miri] Check actual arrays, not a vacuous max(numeric(0)).
+        valid_original = is.finite(wisp_frame$imDat)
+        stopifnot(any(valid_original),
+          identical(dim(wisp_fix$wisp_fix$imDat), dim(wisp_frame$imDat)),
+          identical(dim(wisp_fix$wisp_template), dim(wisp_frame$imDat)),
+          all(is.finite(wisp_fix$wisp_template)),
+          all(is.finite(wisp_fix$wisp_fix$imDat[valid_original])),
+          max(abs((wisp_fix$wisp_fix$imDat+wisp_fix$wisp_template-wisp_frame$imDat)[valid_original])) < 1e-7)
         Rfits_write_pix(data = wisp_fix$wisp_fix$imDat, filename = info_wisp$full[ii], ext = 2)
         
         check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
@@ -2038,12 +2121,16 @@ wispFixer = function(wisp_im, ref_im,
                      sigma_hi=0.5,
                      sigma_lo=NULL,
                      poly=NULL,
-                     cores=1){
+                     cores=1,
+                     source_mask=NULL, source_fill=NULL, ref_is_warped=FALSE){
   
   ref_im$imdat[is.infinite(ref_im$imdat)] = NA #remove infinities
   wisp_im$imDat[is.infinite(wisp_im$imDat)] = NA
   
   #Step 1
+  if(ref_is_warped) {
+    ref_im_warp = ref_im
+  } else {
   ref_im_warp_untweak = propaneWarp(ref_im, keyvalues_out=wisp_im$keyvalues, cores=cores, direction = "forward")
   
   ## 1i Align ref to wisp_im using propaneTweak
@@ -2055,6 +2142,16 @@ wispFixer = function(wisp_im, ref_im,
   )$image_post_fix
   
   
+  }
+  ## [nep-miri] Mask astronomical light BEFORE clipping/smoothing. Fill it
+  ## with an independent wisp estimate, never a zero-valued hole in the sky.
+  if(!is.null(source_mask)) {
+    stopifnot(identical(dim(source_mask), dim(wisp_im$imDat)),
+              identical(dim(source_fill), dim(wisp_im$imDat)), all(is.finite(source_fill)))
+    source_mask = source_mask != 0
+    source_mask[is.na(source_mask)] = TRUE
+  }
+
   #Step X (not in paper, but put here for sky sub reasons)
   real_source = quantile(ref_im_warp$imDat, source_threshold, na.rm=TRUE)
   sky_level = quantile(wisp_im$imDat[ref_im_warp$imDat < real_source], sky_threshold, na.rm=TRUE)
@@ -2075,6 +2172,7 @@ wispFixer = function(wisp_im, ref_im,
   
   #Step 3
   wisp_template = wisp_im$imDat - ref_im_warp$imDat*scale
+  if(!is.null(source_mask)) wisp_template[source_mask] = source_fill[source_mask]
   
   #Step 4
   ## [nep-miri] No clipping at 1; avoid quantiles of an empty positive/negative tail.
@@ -2102,6 +2200,15 @@ wispFixer = function(wisp_im, ref_im,
     wisp_template[is.na(wisp_template)] = 0
   }
   
+  if(!is.null(source_mask)) {
+    ## Blend over a small external guard to avoid a hard seam; source pixels
+    ## themselves contain only the independent prediction, not their own flux.
+    weight = profoundImBlur(matrix(as.numeric(source_mask), nrow(source_mask)), sigma=sigma_hi)
+    weight[source_mask] = 1
+    weight = pmin(1, pmax(0, weight))
+    wisp_template = (1-weight)*wisp_template + weight*source_fill
+  }
+
   if(!is.null(poly)){
     wisp_mask = profoundDrawMask(wisp_im$imDat, poly=poly, mode='apply')$mask
     # wisp_template = magmap(wisp_template * profoundImBlur(image = wisp_mask, sigma = 50), range = c(0,1))$map

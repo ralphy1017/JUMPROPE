@@ -3,3 +3,8 @@ PROFOUND/.DS_STORE
 PROFOUND/.Rhistory
 PROCESS/.Rhistory
 .DS_STORE
+
+# Generated Python/runtime assets
+__pycache__/
+*.py[cod]
+WISP_TEMPLATES/

@@ -1,11 +1,21 @@
 # JumProPe for the NEP TDF reduction
 
-This is the user-selected stable NEP version of [JumProPe](https://github.com/JordanDSilva/JUMPROPE), release `stable-2026-10-29`, published on `ralphy1017/JUMPROPE` branches `main` and `nep-miri`. It includes the tested execution, resume, grid and stacking repairs plus the no-clipping narrow-wisp profile. The upstream [manual](https://www.overleaf.com/read/ksqfmgvhtnhh#3a3d4d) describes the underlying suite.
+This version adds **source-protected, continuous wisp subtraction** to the existing JumProPe wisp stage. It was checked on all 28 program 12529 F200W exposures on NRCA3, NRCA4, NRCB3 and NRCB4. The underlying suite and workflow are described in the [upstream manual](https://www.overleaf.com/read/ksqfmgvhtnhh#3a3d4d).
 
-The parent project at `/home/rzi/Work/pipeline` supplies configs, orchestration, reference catalogs, fixed grids, Image3/photutils, ProPane/ProFound comparison, notebooks and QA. Start with its [README](../../README.md), [live state](../../CONTEXT.md) and [reduction reference](../../JUMPROPE.md). This clone alone does **not** install the patched ProPane 1.12.1.2 package required for reliable large-grid stacking.
+The selected 12529 recipe is `method="continuous_dynamic"`, `sigma_hi=2`, `sigma_lo=2`, `clip_threshold=0.99999`. It combines a source-masked independent wisp prediction with signed residual templates learned from the **other exposures on the same detector**. A common protected sky/1f baseline and continuous model interpolation replace the circular mask-fill switch and positive-only residual floor. Science source pixels are not inpainted or added to DQ masks.
 
-[PATCHES.md](PATCHES.md) is the canonical change ledger. The stable NIRCam wisp defaults are `sky_threshold=0.4`, `source_threshold=0.95`, `scale_threshold=0.95`, `clip_threshold=1` (no clipping), `sigma_hi=0.5`, and `sigma_lo=NULL` (no low-pass floor). They apply to direct `wispFixer` calls and the normal driver with its default `SIGMA_LO=NULL`. `JUMPROPE_WISP_PARAMS` or `additional_params$wisp_params` can override them; a named `sigma_lo=null`/`NULL` explicitly disables a legacy non-NULL `SIGMA_LO`.
+**Setup, reference preparation and parameters:** [PROCESS/WISP_NMF.md](PROCESS/WISP_NMF.md). The repository includes a pinned JADES template downloader, portable preparation/verification CLI, R/Python integration, source-mask propagation into later sky/1f estimation, and regression tests. The NMF solver is vendored with its MIT license and upstream revision.
 
-The user selected this profile after the 28-frame program 12529 F200W A3/A4/B3/B4 comparison and additional before/template/after examples. This is a stable code/profile release, not certification that all narrow residuals or final-mosaic artifacts are removed. The compact SW-only injection stress test recovered about 19% of input flux with this setting; this is not a measured bias for every real galaxy. Preserve stellar diffraction structure and validate source/diffuse-light recovery for the intended dataset.
+**Validation and limits:** [docs/wisp-validation-12529.md](docs/wisp-validation-12529.md). The measured circular background pedestal is removed in the checked regions. Some narrow A3 residuals remain; full-mosaic photometry and arbitrary diffuse-light preservation are not established, and residual-template uncertainty is not fully propagated into ERR. The repository does not include the NEP science data or its large prepared reference assets.
 
-Run the lightweight option/clipping regression check with `Rscript tests/test_wisp_defaults.R` from this directory. The release also checks the default profile against all 28 previously generated 12529 templates, reusing their saved LW warps. Existing corrected files are reused by the driver; use a fresh working-copy run to apply new settings. This release does not reprocess existing science products.
+The continuous method is **explicitly selected** through `JUMPROPE_WISP_PARAMS` or `additional_params$wisp_params`; it requires prepared references and does not silently become the default for unprepared datasets. Legacy `wispFixer` defaults remain compatible with the earlier `stable-2026-10-29` tag. That historical no-clipping profile was superseded for this dataset after full-frame/source inspection; it should not be interpreted as the current recommended 12529 configuration. The old tag is retained unchanged.
+
+Run from the repository root:
+
+```sh
+Rscript tests/test_wisp_defaults.R
+Rscript tests/test_wisp_source_mask.R
+python tests/test_wisp_continuous.py
+```
+
+Use the established JWST/R environment, with NumPy, SciPy and Astropy for the new helpers. Set `JUMPROPE_PYTHON` to that interpreter. The parent reduction supplies orchestration, calibration references and grids; this clone does not install the patched ProPane 1.12.1.2 needed for the parent project's large-grid stacking. [PATCHES.md](PATCHES.md) records implementation changes. Existing calibrated science and mosaics are not reprocessed by installing this code.

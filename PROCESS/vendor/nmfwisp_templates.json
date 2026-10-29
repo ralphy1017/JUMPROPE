@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/zihaowu-astro/NMFwisp",
+  "commit": "bd6609fa9a003d1737e3da6f7e266cf10d984bf9",
+  "files": {
+    "nrca4/nrca4_f200w_wisp.fits.gz": "5ed2420ac6a053beeb8d00ce8e8090fda27e146219e15781965e5ab5b56affeb",
+    "nrcb3/nrcb3_f200w_wisp.fits.gz": "25b751801927f35e8c031bee45094453fc57cd9749e892ef691759aeb0741296",
+    "nrca3/nrca3_persistence.fits.gz": "171b876b71d1635e8c2ec1a83327c904a4ac250ddfa531d1df0568c89279aaa3",
+    "nrca3/nrca3_f200w_wisp.fits.gz": "332fefc7b2fb1f4bd961c10678d0077afc052d53b7405126e6ae35ee5c2b318d",
+    "nrcb4_org/nrcb4_f200w_wisp.fits.gz": "c224e33c7fad1542ff267e81db64362f62697fffc0ef1d3385d66855a4f0c036"
+  }
+}
