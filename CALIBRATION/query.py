@@ -161,7 +161,7 @@ def vid_query(ref_dir, visit_id, stage, dl_products=False):
     )
 
     visit_ids = np.array([obs[3:13] for obs in products_stage2["obs_id"]])
-    idx = np.flatnonzero(np.core.defchararray.find(visit_ids,str(visit_id))!=-1)
+    idx = np.flatnonzero(np.char.find(visit_ids,str(visit_id))!=-1)  ## [fix] np.core.defchararray was removed in NumPy 2
 
     print("Moving the table")
     Observations.download_products(products_stage2[idx], download_dir=dl_dir, curl_flag=True)
@@ -188,7 +188,7 @@ def main(args_dict):
         print("Please set ENV variables. ")
         exit()
 
-    if JUMPROPE_MAST_TOKEN is not None:
+    if JUMPROPE_MAST_TOKEN not in (None, "", "9999"):  ## [fix] 9999 is the placeholder in initialise_env.sh; public data need no login
         ## Used for proprietary data, not a requirement for JP
         my_session = Observations.login(token=str(JUMPROPE_MAST_TOKEN))
 

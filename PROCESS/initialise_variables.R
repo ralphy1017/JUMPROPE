@@ -41,8 +41,23 @@ initialise_params = function(){
    ## Claws removal mode
    ## I.e., perform "wisp removal" algorithm on all NIRCam short wavelength detectors
    ## and not only wisp affected [A3,A4,B3,B4]
-   do_claws = FALSE, 
-   
+   do_claws = FALSE,
+
+   ## Wisp removal settings, passed to wispFixer (NIRCam A3, A4, B3, B4; all SW detectors with do_claws).
+   ## sigma_lo = NULL turns the low-pass fill off. Visits listed in ID_large/ID_vlarge always use sigma_lo = NULL.
+   wisp_params = list(
+     source_threshold = 0.95, ## quantile of the LW reference above which pixels are real sources
+     scale_threshold = 0.95, ## quantile of the SW/LW flux ratio used to scale out sources
+     sky_threshold = 0.5, ## quantile used for the sky level
+     clip_threshold = 0.9999, ## clip the brightest/faintest template pixels (1 = no clipping)
+     sigma_hi = 2, ## Gaussian smoothing of the wisp template (pixels)
+     sigma_lo = 2 ## low-pass smoothing used to fill template holes (pixels)
+   ),
+
+   ## ProPane stacks, patched stacks and RGBs. FALSE gives only Pro1oF/cal and Pro1oF/cal_sky_renorm
+   ## (NIRCam long wavelength stacks are still made, because wisp removal uses them as the reference).
+   make_stacks = TRUE,
+
    ## Path to reference astrometric catalogue - to make the ProPane stacks
    tweak_catalogue = NULL, ## NULL will have no internal tweak
 

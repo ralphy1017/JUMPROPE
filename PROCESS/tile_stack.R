@@ -11,6 +11,17 @@ library(data.table)
 library(stringr)
 library(Cairo)
 
+## [fix] run_all_process.R writes one cal_sky_info_<VID>.csv per VID. Use Pro1oF/cal_sky_info.csv if it
+## exists (VID "" runs), otherwise combine the per-VID files.
+read_cal_sky_info = function(path){
+  if(file.exists(path)) return(fread(path))
+  parts = list.files(dirname(path), pattern = "^cal_sky_info_.*\\.csv$", full.names = TRUE)
+  if(length(parts) == 0) stop("No cal_sky_info.csv or cal_sky_info_<VID>.csv in ", dirname(path))
+  out = rbindlist(lapply(parts, fread), fill = TRUE)
+  out = out[!duplicated(out$full), ]
+  return(out)
+}
+
 ## -- START OF EDIT --
 
 ## User defined inputs here, for example
@@ -69,24 +80,24 @@ deep_stacker = function(input_args){
   if( !is.null(input_args$ref_dir) & !input_args$calstack ){
     patch_dir = paste0(input_args$ref_dir, "/Patch_Stacks")
     dump_dir = paste0(input_args$ref_dir, "/dump")
-    cal_sky_info = fread(paste0(input_args$ref_dir, "/Pro1oF/cal_sky_info.csv"))
+    cal_sky_info = read_cal_sky_info(paste0(input_args$ref_dir, "/Pro1oF/cal_sky_info.csv"))
     mosaic_dir = paste0(input_args$ref_dir, "/Mosaic_Stacks/")
   }else if ( !is.null(input_args$ref_dir) & input_args$calstack ){
     cal_sky_renorm_dir = paste0(input_args$ref_dir, "/Pro1oF/cal_sky_renorm/")
     sky_frames_dir = paste0(input_args$ref_dir, "/sky_pro/sky_frames/")
     dump_dir = paste0(input_args$ref_dir, "/dump")
-    cal_sky_info = fread(paste0(input_args$ref_dir, "/Pro1oF/cal_sky_info.csv"))
+    cal_sky_info = read_cal_sky_info(paste0(input_args$ref_dir, "/Pro1oF/cal_sky_info.csv"))
     mosaic_dir = paste0(input_args$ref_dir, "/Mosaic_Stacks/")
   }else if ( is.null(input_args$ref_dir) & !input_args$calstack ){
     patch_dir = additional_args$patch_dir
     dump_dir = additional_args$dump_dir
-    cal_sky_info = fread(additional_args$cal_sky_info_stub)
+    cal_sky_info = read_cal_sky_info(additional_args$cal_sky_info_stub)
     mosaic_dir = additional_args$mosaic_dir
   }else if ( is.null(input_args$ref_dir) & input_args$calstack ){
     cal_sky_renorm_dir = additional_args$cal_sky_renorm_dir
     sky_frames_dir = additional_args$sky_frames_dir
     dump_dir = additional_args$dump_dir
-    cal_sky_info = fread(additional_args$cal_sky_info_stub)
+    cal_sky_info = read_cal_sky_info(additional_args$cal_sky_info_stub)
     mosaic_dir = additional_args$mosaic_dir
   }
   
@@ -132,13 +143,18 @@ deep_stacker = function(input_args){
       cores = input_args$cores_search
     )
     
-    find_frames$FILT = Rfits_key_scan(
+    filt_scan = Rfits_key_scan(
       find_frames$full, 
-      keylist = c("FILTER"),
+      keylist = c("FILTER", "PUPIL"),
       extlist = 1,
       cores = input_args$cores_search
-    )$FILTER
-    find_frames$MAGZERO_FIX = cal_sky_info$MAGZERO_FIX[cal_sky_info$full %in% find_frames$full]
+    )
+    ## [fix] NIRISS F090W-F200W (FILTER=CLEAR) and NIRCam pupil-wheel filters: band from PUPIL
+    find_frames$FILT = paste0(filt_scan$FILTER)
+    in_pupil = !is.null(filt_scan$PUPIL) & grepl("^F[0-9]{3}[WMN]$", paste0(filt_scan$PUPIL))
+    find_frames$FILT[in_pupil] = paste0(filt_scan$PUPIL)[in_pupil]
+    ## [fix] %in% took cal_sky_info's row order, so zeropoints could be assigned to the wrong frames
+    find_frames$MAGZERO_FIX = cal_sky_info$MAGZERO_FIX[match(find_frames$full, cal_sky_info$full)]
     
   }else{
     ## Pull the files form the stack_patch directory
@@ -241,6 +257,7 @@ deep_stacker = function(input_args){
           ## Same masking as in gen_stack
           temp_image = Rfits_read_image(file_info_filt[kk,'full'], ext=2)
           temp_mask = Rfits_read_image(file_info_filt[kk,'full'], ext=4, header=FALSE)
+          temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
           temp_image = propaneBadPix(
             image = temp_image,
             patch = T
@@ -324,13 +341,13 @@ deep_stacker = function(input_args){
         
         if(any(is.na(match_cat$bestmatch))){
           tweak_cat = list(par = c(0,0,0)) ## No matches => nothing to tweak on unfortunately...
-          twIDX = NA
+          twIDX = k ## [fix] keep the frame with its pipeline WCS (it was dropped from the stack)
         }else{
           pix_cat = Rwcs_s2p(RA = ref_cat$RA, Dec = ref_cat$Dec, keyvalues = image_list[[k]]$keyvalues)
           propaneTweak_cat_ref = pix_cat[match_cat$bestmatch$refID, ]
           if( is.null(dim(propaneTweak_cat_ref)) ){
             tweak_cat = list(par = c(0,0,0))
-            twIDX = NA
+            twIDX = k ## [fix] keep the frame with its pipeline WCS (it was dropped from the stack)
           }else{
             tweak_cat = propaneTweakCat(
               cat_ref = propaneTweak_cat_ref,

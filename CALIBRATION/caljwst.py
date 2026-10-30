@@ -39,21 +39,19 @@ def run1(input_data, rate_dir, cal_dir, files_bad_dir):
     os.makedirs(cal_dir, exist_ok=True)
 
     files = input_data
-    detector1 = calwebb_detector1.Detector1Pipeline()
 
-    ## EDIT THE CODE WITH THE JWST CALIBRATION OPTIONS HERE 
-    detector1.output_dir = rate_dir
-    detector1.jump.maximum_cores = args.max_cores
-    detector1.ramp_fit.maximum_cores = args.max_cores
-    # detector1.emicorr.skip = False ## Do the EMI banding correction for MIRI 
-
+    ## EDIT THE CODE WITH THE JWST CALIBRATION OPTIONS HERE (add step options to the "steps" dictionaries)
+    ## [fix] Pipeline.call() instead of Pipeline().run(): only call() applies the CRDS parameter reference
+    ## files (pars-*), i.e. the instrument/filter-specific step defaults of the CRDS context (e.g. NIRCam
+    ## snowball flagging, MIRI shower flagging). The options set below are the same as before.
+    ## e.g. Detector1 steps: "emicorr": {"skip": False} for the MIRI EMI banding correction
     try:
-        run_output = detector1.run(files)
-        image2 = calwebb_image2.Image2Pipeline()
-        image2.output_dir = cal_dir
-        image2.save_results = True
-        image2.resample.skip = True  # we don't need to resample the cals, since they get drizzled later
-        image2.run(run_output)
+        run_output = calwebb_detector1.Detector1Pipeline.call(
+            files, output_dir=rate_dir,
+            steps={"jump": {"maximum_cores": args.max_cores}, "ramp_fit": {"maximum_cores": args.max_cores}})
+        calwebb_image2.Image2Pipeline.call(
+            run_output, output_dir=cal_dir, save_results=True,
+            steps={"resample": {"skip": True}})  # we don't need to resample the cals, since they get drizzled later
     except Exception as e:
         ## in case the uncal mucks up
         files_bad_stub = (files.split("UNCAL")[1].split("/"))[-1]
@@ -112,7 +110,8 @@ def cal(ref_dir, ra, dec, rad, visitid):
         uncal_dir + "*info.csv"
     )
     print(uncal_dir)
-    df = pd.concat((pd.read_csv(f) for f in info_tables), ignore_index=True)
+    ## [fix] --VISITID downloads write <pid>_UNCAL.csv, not *info.csv; pd.concat([]) raised an error
+    df = pd.concat((pd.read_csv(f) for f in info_tables), ignore_index=True) if info_tables else pd.DataFrame()
 
     if (len(df) > len(files)):
         print("Some files appear to be missing in this region \n compared to what was downloaded with cone-search.")

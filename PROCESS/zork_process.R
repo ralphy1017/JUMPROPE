@@ -82,7 +82,7 @@ zork = function(){
     if(FILT == "short"){
       FILT = "F070W|F090W|F115W|F150W|F200W|F140M|F162M|F182M|F210M|F164N|F187N|F212N"
     }else if(FILT == "long"){
-      FILT = "F277W|F356W|F444W|F250M|F300M|F335M|F360M|F410M|F430M|F460M|F480M|F323N|F405N|F466N|F470N"
+      FILT = "F277W|F356W|F444W|F250M|F300M|F335M|F360M|F410M|F430M|F460M|F480M|F322W2|F323N|F405N|F466N|F470N" ## [fix] + F322W2
     }
   } else {
     message(paste0("Error Nargs wrong: ", length(args)))
@@ -118,11 +118,11 @@ zork = function(){
   ref_dir = Sys.getenv(x = 'JUMPROPE_REF_DIR')
   if(ref_dir == ""){
     ref_dir = make_directory_structure()
+  }else{
+    create_directory_structure(ref_dir) ## [fix] no prompt when JUMPROPE_REF_DIR is set
   }
   
-  if(do_NIRISS){
-      FILT = "CLEAR|NIS"
-    }
+  ## [fix] NIRISS no longer forces FILT = "CLEAR|NIS" (bands are read from PUPIL, see band_of)
   
   cal_sky_info_save_dir = paste0(ref_dir, "/Pro1oF/")
   Pro1oF_dir = paste0(ref_dir, "/Pro1oF/cal/")
@@ -199,7 +199,7 @@ zork = function(){
       cores_stack = cores_stack,
       tasks_stack = tasks_stack,
       
-      SIGMA_LO = NULL #keep blurring at wisp rem stage off by default
+      SIGMA_LO = NULL ## wisp settings are in initialise_variables.R (wisp_params)
     )
     
     lapply(select_code,function(x){code_organiser[[x]](input_args)})

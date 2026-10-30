@@ -1,5 +1,82 @@
 source(file.path(dirname(sys.frame(1)$ofile), "..", "config.R"))
 
+## [fix] Helper functions used by the bug fixes below. See CHANGES.md.
+
+## Select visit IDs that start with VID, where VID may be several IDs separated by "|"
+## (e.g. "1345001001|2736001001"). The old fixed-string grep matched "A|B" literally.
+vid_match = function(visit_ids, VID){
+  v = paste0(visit_ids)
+  if(is.null(VID) || VID == "") return(rep(TRUE, length(v)))
+  parts = strsplit(VID, "|", fixed = TRUE)[[1]]
+  parts = parts[nzchar(parts)]
+  Reduce(`|`, lapply(parts, function(p) startsWith(v, p)))
+}
+
+## Effective band of a frame. NIRCam F162M/F164N/F323N/F405N/F466N/F470N and NIRISS F090W-F200W
+## sit in the PUPIL wheel, so FILTER alone reads F150W2/F322W2/F444W (NIRCam) or CLEAR (NIRISS).
+band_of = function(filter, pupil = NULL){
+  band = paste0(filter)
+  if(is.null(pupil)) return(band)
+  pupil = paste0(pupil)
+  in_pupil = grepl("^F[0-9]{3}[WMN]$", pupil)
+  band[in_pupil] = pupil[in_pupil]
+  return(band)
+}
+
+## Keep only direct-imaging exposures (drops WFSS, SOSS, AMI, coronagraphy, NIRSpec, ...).
+## Frames without EXP_TYPE are kept, as before.
+is_imaging = function(exp_type){
+  exp_type = paste0(exp_type)
+  is.na(exp_type) | exp_type == "NA" | exp_type %in% c("NRC_IMAGE", "NIS_IMAGE", "MIR_IMAGE")
+}
+
+## Header scan used by load_files: adds BAND (see band_of) and keeps imaging frames only.
+scan_frames = function(filelist, VID, FILT){
+  filelist = unique(filelist[grepl(".fits$", filelist)]) ## same list, same order as Rfits_key_scan uses
+  if(!is.null(VID) && VID != ""){
+    filelist = filelist[grepl(VID, basename(filelist))] ## cheap name filter before reading any header
+  }
+  if(length(filelist) == 0) return(character(0))
+  scan = Rfits_key_scan(filelist = filelist, keylist = c("FILTER", "PUPIL", "EXP_TYPE", "PROGRAM", "VISIT_ID"))
+  n = length(filelist)
+  pupil = if(is.null(scan$PUPIL)) rep(NA, n) else scan$PUPIL
+  exp_type = if(is.null(scan$EXP_TYPE)) rep(NA, n) else scan$EXP_TYPE
+  band = band_of(scan$FILTER, pupil)
+  keep = vid_match(scan$VISIT_ID, VID) & is_imaging(exp_type) & grepl(FILT, band)
+  return(filelist[keep])
+}
+
+## DQ arrays from jwst >= 3 are uint32, which Rfits reads as integer64; "%% 2" on those fails
+## ("Not a matrix."). Written inline (not as a function) where used inside foreach, so it also
+## works on PSOCK workers that do not see global functions.
+
+## Run tag: keeps the run-specific bookkeeping files of one VID selection apart from those of
+## another (sky_info, super skies, cal_sky_info, stack temp files), so separate Rscript runs on
+## different visits can share one JUMPROPE_REF_DIR. VID "" keeps Jordan's original file names.
+run_tag = function(VID){
+  if(is.null(VID) || VID == "") return("")
+  tag = gsub("[^0-9A-Za-z]+", "-", VID)
+  if(nchar(tag) > 60){
+    tag = paste0(substr(tag, 1, 40), "-n", length(strsplit(VID, "|", fixed = TRUE)[[1]]))
+  }
+  return(tag)
+}
+sky_info_file = function(input_args){
+  tag = run_tag(input_args$VID)
+  paste0(input_args$sky_pro_dir, "/sky_info", ifelse(tag == "", "", paste0("_", tag)), ".csv")
+}
+super_sky_dir = function(input_args){
+  tag = run_tag(input_args$VID)
+  if(tag == "") return(input_args$sky_super_dir)
+  out = paste0(input_args$sky_super_dir, "/", tag, "/")
+  dir.create(out, recursive = TRUE, showWarnings = FALSE)
+  return(out)
+}
+cal_sky_info_file = function(input_args){
+  tag = run_tag(input_args$VID)
+  paste0(input_args$cal_sky_info_save_dir, "/cal_sky_info", ifelse(tag == "", "", paste0("_", tag)), ".csv")
+}
+
 load_files = function(input_args, which_module, sky_info = NULL){
   ## Load the correct files for what ever task
   ## Correctly place files into whatever module
@@ -28,21 +105,13 @@ load_files = function(input_args, which_module, sky_info = NULL){
       files_1oF = files_1oF[!grepl('_mirimage_',files_1oF) & !grepl('_nis_', files_1oF) & grepl(".fits$", files_1oF)]
     }
     
-    scan_1oF = Rfits_key_scan(filelist = files_1oF, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
-    
-    files_1oF = files_1oF[pid_idx]
-    files_1oF = files_1oF[grepl(FILT, scan_1oF$FILTER[pid_idx])]
+    files_1oF = scan_frames(files_1oF, VID, FILT) ## [fix] VID 'A|B', PUPIL bands, imaging only
     return(files_1oF)
   }
   
   if(which_module == "cal_process"){
     files_cal = c(
-      list.files(Pro1oF_dir, 
-                 full.names = TRUE, 
-                 pattern = glob2rx(paste0("*",VID,"*.fits")))
+      list.files(Pro1oF_dir, full.names = TRUE, pattern = ".fits$") ## [fix] glob2rx() mangled VID 'A|B'
     )
     if(do_NIRISS){
       files_cal = files_cal[!grepl('_mirimage_',files_cal) & grepl('_nis_',files_cal) & grepl(".fits$", files_cal)]
@@ -52,22 +121,14 @@ load_files = function(input_args, which_module, sky_info = NULL){
       files_cal = files_cal[!grepl('_mirimage_',files_cal) & !grepl('_nis_', files_cal) & grepl(".fits$", files_cal)]
     }
     
-    scan_cal = Rfits_key_scan(filelist = files_cal, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal$VISIT_ID %in% corr_pid
-    
-    files_cal = files_cal[pid_idx]
-    files_cal = files_cal[grepl(FILT, scan_cal$FILTER[pid_idx])]
+    files_cal = scan_frames(files_cal, VID, FILT) ## [fix] VID 'A|B', PUPIL bands, imaging only
     return(files_cal)
   }
   
   if(which_module == "super_sky"){
     # sky_frames_dir = paste0(sky_pro_dir, "/sky_frames/")
     # sky_super_dir = paste0(sky_pro_dir, "/sky_super/")
-    files_sky = list.files(sky_frames_dir, 
-                           full.names = TRUE, 
-                           pattern = glob2rx(paste0("*", VID, "*.fits")))
+    files_sky = list.files(sky_frames_dir, full.names = TRUE, pattern = ".fits$") ## [fix] glob2rx() mangled VID 'A|B'
 
     if(do_NIRISS){
       files_sky = files_sky[!grepl('_mirimage_',files_sky) & grepl('_nis_',files_sky) & grepl(".fits$", files_sky)]
@@ -77,23 +138,15 @@ load_files = function(input_args, which_module, sky_info = NULL){
       files_sky = files_sky[!grepl('_mirimage_',files_sky) & !grepl('_nis_', files_sky) & grepl(".fits$", files_sky)]
     }
     
-    scan_sky = Rfits_key_scan(filelist = files_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_sky$VISIT_ID %in% corr_pid
-    
-    files_sky = files_sky[pid_idx]
-    files_sky = files_sky[grepl(FILT, scan_sky$FILTER[pid_idx])]
+    files_sky = scan_frames(files_sky, VID, FILT) ## [fix] VID 'A|B', PUPIL bands, imaging only
     return(files_sky)
   }
   
   if(which_module == "apply_super"){
     
-    corr_pid = grep(VID, sky_info$visit_id, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = paste0(sky_info$visit_id) %in% corr_pid
+    pid_idx = vid_match(sky_info$visit_id, VID) ## [fix] VID 'A|B'
     
-    sky_info = sky_info[grepl(VID, sky_info$fileim) & pid_idx & grepl(FILT, sky_info$filter), ]
+    sky_info = sky_info[pid_idx & grepl(FILT, sky_info$filter), ] ## [fix] dropped grepl(VID, fileim), which never matches 'A|B' file names
     
     if(do_NIRISS){
       sky_info = sky_info[grepl("NIS", sky_info$detector), ]
@@ -107,7 +160,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
   
   if(which_module == "modify_pedestal"){
     files_cal_sky = c(
-      list.files(cal_sky_dir, full.names = TRUE, pattern = glob2rx(paste0("*", VID, "*.fits"))) #If running Pro1/F outputs
+      list.files(cal_sky_dir, full.names = TRUE, pattern = ".fits$") #If running Pro1/F outputs ## [fix] glob2rx() mangled VID 'A|B'
     )
     
     if(do_NIRISS){
@@ -118,13 +171,7 @@ load_files = function(input_args, which_module, sky_info = NULL){
       files_cal_sky = files_cal_sky[!grepl('_mirimage_',files_cal_sky) & !grepl('_nis_', files_cal_sky) & grepl(".fits$", files_cal_sky)]
     }
     
-    scan_cal_sky = Rfits_key_scan(filelist = files_cal_sky, keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_cal_sky$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID] ## Make sure 4 digit PID is embedded in 10 digit VID
-    pid_idx = scan_cal_sky$VISIT_ID %in% corr_pid
-    
-    files_cal_sky = files_cal_sky[pid_idx]
-    files_cal_sky = files_cal_sky[grepl(FILT, scan_cal_sky$FILTER[pid_idx])]
+    files_cal_sky = scan_frames(files_cal_sky, VID, FILT) ## [fix] VID 'A|B', PUPIL bands, imaging only
     return(files_cal_sky)
   }
   
@@ -132,12 +179,8 @@ load_files = function(input_args, which_module, sky_info = NULL){
     files_wisp = input_args$filelist
     files_wisp = files_wisp[grepl(VID, files_wisp) & grepl(".fits$", files_wisp)]
     
-    scan_1oF = Rfits_key_scan(filelist = files_wisp,keylist = c("FILTER", "PROGRAM", "VISIT_ID"))
-    corr_pid = grep(VID, scan_1oF$VISIT_ID, fixed = T, value = T)
-    corr_pid = corr_pid[substring(corr_pid, 1, nchar(VID)) == VID]
-    pid_idx = scan_1oF$VISIT_ID %in% corr_pid
-    
-    files_wisp = files_wisp[pid_idx]
+    files_wisp = files_wisp[grepl('_nrc', basename(files_wisp))] ## wisps are a NIRCam feature
+    files_wisp = scan_frames(files_wisp, VID, "") ## [fix] VID 'A|B', imaging only
     return(files_wisp)
   }
   
@@ -218,6 +261,7 @@ do_1of = function(input_args){
         }
   
         temp_mask = temp_image$DQ$imDat
+        temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
         JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
   
         temp_zap = profoundSkyScan(image = temp_image$SCI$imDat,
@@ -281,6 +325,7 @@ do_1of = function(input_args){
         }
   
         temp_mask = temp_image$DQ$imDat
+        temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
         JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
   
         if(nrow(temp_image$SCI$imDat) != 2048 | ncol(temp_image$SCI$imDat) != 2048){
@@ -361,11 +406,12 @@ do_cal_process = function(input_args, filelist = NULL){
   #get main info:
   obs_info = Rfits_key_scan(
     filelist = filelist,
-    keylist = c('VISIT_ID','OBS_ID','EXPOSURE','DETECTOR','FILTER','DATE-OBS','EFFEXPTM','CAL_VER','CRDS_CTX'),
+    keylist = c('VISIT_ID','OBS_ID','EXPOSURE','DETECTOR','FILTER','PUPIL','DATE-OBS','EFFEXPTM','CAL_VER','CRDS_CTX'),
     extlist = 1,
     fileinfo = 'all'
   )
   obs_info = data.frame(obs_info)
+  obs_info$FILTER = band_of(obs_info$FILTER, obs_info$PUPIL) ## [fix] sky frames and super skies are keyed on the actual band
   
   lo_loop = 1
   hi_loop = dim(obs_info)[1]
@@ -384,6 +430,7 @@ do_cal_process = function(input_args, filelist = NULL){
       #get cal data
       JWST_cal_image = Rfits_read_image(file_image, ext=2)
       temp_mask = Rfits_read_image(file_image, ext=4, header = FALSE)
+      temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
       JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
       
       #basic info
@@ -613,10 +660,13 @@ do_regen_sky_info = function(input_args){
   registerDoParallel(cores=cores)
   
   # sky_frames_dir = paste0(sky_pro_dir, "/sky_frames/")
-  filelist = list.files(sky_frames_dir, full.names = TRUE, pattern = glob2rx(paste0("*", input_args$VID, "*.fits")))
-  filelist = grep('.fits$', filelist, value=TRUE)
+  filelist = list.files(sky_frames_dir, full.names = TRUE, pattern = ".fits$")
+  filelist = filelist[grepl(input_args$VID, basename(filelist))] ## [fix] glob2rx() mangled VID 'A|B'
 
   cat('Processing',length(filelist),'files\n')
+  if(length(filelist) == 0){
+    stop("No sky frames for VID ", input_args$VID, " in ", sky_frames_dir)
+  }
   
   sky_info = foreach(i = 1:length(filelist), .combine="rbind")%dopar%{
     temp_info = Rfits_read_header(filelist[i])$keyvalues
@@ -629,7 +679,7 @@ do_regen_sky_info = function(input_args){
     sky_info = data.frame((sky_info))
   }
   colnames(sky_info) = tolower(colnames(sky_info))
-  write.csv(sky_info, paste0(sky_pro_dir, '/sky_info.csv'), row.names=FALSE)
+  write.csv(sky_info, sky_info_file(input_args), row.names=FALSE) ## [fix] per-run file (see run_tag)
 }
 do_super_sky = function(input_args){
   
@@ -649,7 +699,8 @@ do_super_sky = function(input_args){
   good_pix_cut = 0.15
   
   filelist = load_files(input_args, which_module = "super_sky")
-  sky_info = fread(paste0(sky_pro_dir, '/sky_info.csv'))
+  sky_info = fread(sky_info_file(input_args)) ## [fix] per-run file (see run_tag)
+  sky_super_dir = super_sky_dir(input_args) ## [fix] per-run super skies (see run_tag)
   
   ## improved logic for file matching - have to match for VID/FILT
   normalised_paths = normalizePath(paste0(sky_info$pathsky, "/", sky_info$filesky), winslash = "/", mustWork = FALSE)
@@ -759,7 +810,8 @@ do_apply_super_sky = function(input_args){
   parallel_type = input_args$additional_params$parallel_type
   skip_completed_files = additional_params$skip_completed_files
   
-  sky_info = fread(paste0(sky_pro_dir, "/sky_info.csv"))
+  sky_info = fread(sky_info_file(input_args)) ## [fix] per-run file (see run_tag)
+  sky_super_dir = super_sky_dir(input_args) ## [fix] per-run super skies (see run_tag)
   # sky_super_dir = paste0(sky_pro_dir, "/sky_super/")
   
   setcal_sky_remfile = function(file_image, cal_sky_dir){
@@ -810,7 +862,7 @@ do_apply_super_sky = function(input_args){
       file_sky = paste(sky_info[i,'pathsky'], file_sky, sep='/')
       temp_sky = Rfits_read(file_sky, pointer=FALSE)
       
-      file_super_sky = paste0(sky_super_dir,'/super_',temp_cal[[1]]$keyvalues$DETECTOR,'_',temp_cal[[1]]$keyvalues$FILTER,'.fits')
+      file_super_sky = paste0(sky_super_dir,'/super_',sky_info[i,'detector'],'_',sky_info[i,'filter'],'.fits') ## [fix] band (PUPIL), as used to build it
       super_sky = Rfits_read_image(file_super_sky, header=FALSE)
       
       obj_idx = temp_sky$PIXELMASK$imDat==0 & temp_sky$OBJECTMASK$imDat==0
@@ -1022,6 +1074,7 @@ do_modify_pedestal = function(input_args){
           ext_names = names(temp_cal_sky)
           
           temp_mask = Rfits_read_image(cal_sky_info[i,'full'], ext = "DQ", header = F)
+          temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
           JWST_cal_mask = profoundDilate(temp_mask %% 2 == 1, size=3)
           
           pro_current_sky = profoundProFound(temp_cal_sky$SCI[,]$imDat, mask=JWST_cal_mask, sky=0, box=683, redosky = FALSE)
@@ -1092,20 +1145,35 @@ do_cal_sky_info = function(input_args){
   cal_sky_renorm_dir = input_args$cal_sky_renorm_dir
   cal_sky_info_save_dir = input_args$cal_sky_info_save_dir
   cores = input_args$cores_pro
+  VID = input_args$VID
   
-  cal_sky_info_WCS = Rfits_key_scan(dirlist=cal_sky_renorm_dir,
+  ## [fix] Scan only this run's visits. Scanning the whole cal_sky_renorm directory on every run
+  ## costs O(database) header reads per visit. VID "" still scans everything, as before.
+  filelist = list.files(cal_sky_renorm_dir, pattern = ".fits$", full.names = TRUE, recursive = TRUE)
+  if(!is.null(VID) && VID != ""){
+    filelist = filelist[grepl(VID, basename(filelist))]
+  }
+  if(length(filelist) == 0){
+    message("No cal_sky_renorm files for VID ", VID)
+    return(invisible(NULL))
+  }
+  
+  cal_sky_info_WCS = Rfits_key_scan(filelist=filelist,
                                     keylist = c('PHOTMJSR','PIXAR_SR','CRVAL1', 'CRVAL2', 'CD1_1', 'CD1_2', 'CD2_1', 'CD2_2'),
                                     extlist = 2,
                                     fileinfo = 'all',
                                     cores = cores
   )
-  cal_sky_info = Rfits_key_scan(dirlist=cal_sky_renorm_dir,
-                                keylist = c('VISIT_ID','DATE-OBS', 'DETECTOR', 'FILTER', 'EFFEXPTM', 'CRDS_CTX'),
+  cal_sky_info = Rfits_key_scan(filelist=filelist,
+                                keylist = c('VISIT_ID','DATE-OBS', 'DETECTOR', 'FILTER', 'PUPIL', 'EFFEXPTM', 'CRDS_CTX'),
                                 extlist = 1,
                                 fileinfo = 'none',
                                 cores = cores
   )
+  ## [fix] NIRISS CLEAR / NIRCam pupil-wheel filters: use the actual band
+  cal_sky_info$FILTER = band_of(cal_sky_info$FILTER, cal_sky_info$PUPIL)
   cal_sky_info = cbind(cal_sky_info_WCS, cal_sky_info)
+  cal_sky_info = cal_sky_info[vid_match(cal_sky_info$VISIT_ID, VID), ]
   cal_sky_info$MAGZERO = -2.5*log10(cal_sky_info$PIXAR_SR*1e6) + 8.9 #note the -ve
   cal_sky_info = as.data.table(cal_sky_info)
   
@@ -1113,19 +1181,22 @@ do_cal_sky_info = function(input_args){
   
   cal_sky_info$MAGZERO_FIX = 0.0
   ## get most recent pmap
-  most_recent_pmap_ctx = max(unique(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", s)))
+  ## [fix] was the undefined variable `s`; compared as numbers ("999" > "1584" as strings)
+  pmap_num = suppressWarnings(as.numeric(gsub(".*jwst_(\\d+)\\.pmap.*", "\\1", cal_sky_info$CRDS_CTX)))
+  most_recent_pmap_ctx = if(all(is.na(pmap_num))) NA else max(pmap_num, na.rm = TRUE)
   
   for(i in 1:dim(cal_sky_info)[1]){
     #below is then Eqn [1] below
     ## Tie to pmap 1179 for now
-    temp_MAGZERO_FIX = cal_sky_info[i,MAGZERO] -2.5*log10(as.numeric(pmap[CRDS_CTX==paste0('jwst_', most_recent_pmap_ctx, '.pmap') & DETECTOR==cal_sky_info[i,'DETECTOR'] & FILTER==cal_sky_info[i,'FILTER'],PHOTMJSR]) / cal_sky_info[i,PHOTMJSR])
+    temp_MAGZERO_FIX = cal_sky_info$MAGZERO[i] -2.5*log10(as.numeric(pmap[CRDS_CTX==paste0('jwst_', most_recent_pmap_ctx, '.pmap') & DETECTOR==cal_sky_info$DETECTOR[i] & FILTER==cal_sky_info$FILTER[i],PHOTMJSR]) / cal_sky_info$PHOTMJSR[i])
     if(length(temp_MAGZERO_FIX) == 1){
       cal_sky_info[i,MAGZERO_FIX := temp_MAGZERO_FIX] 
     }else{
-      cal_sky_info[i,MAGZERO_FIX := cal_sky_info[i,MAGZERO]]
+      cal_sky_info[i,MAGZERO_FIX := cal_sky_info$MAGZERO[i]]
     }
   }
-  write.csv(cal_sky_info, paste0(cal_sky_info_save_dir, '/cal_sky_info.csv'), row.names = FALSE)
+  ## [fix] per-run file name (see run_tag), so concurrent runs do not overwrite each other
+  write.csv(cal_sky_info, cal_sky_info_file(input_args), row.names = FALSE)
 }
 do_gen_stack = function(input_args){
   
@@ -1145,7 +1216,9 @@ do_gen_stack = function(input_args){
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = input_args$additional_params$parallel_type
   
-  ref_cat = input_args$additional_params$ref_cat
+  ## [fix] initialise_variables.R defines tweak_catalogue; ref_cat was never set, so tweaking never ran
+  ref_cat = input_args$additional_params$tweak_catalogue
+  if(is.null(ref_cat)) ref_cat = input_args$additional_params$ref_cat
   if(is.null(ref_cat)){
     do_tweak = FALSE
   }else{
@@ -1176,23 +1249,25 @@ do_gen_stack = function(input_args){
   median_dir = input_args$median_dir
   sky_frames_dir = input_args$sky_frames_dir
   dump_dir_stub = input_args$dump_dir
-  orig_cal_sky_info = fread(paste0(input_args$cal_sky_info_save_dir, '/cal_sky_info.csv'))
+  orig_cal_sky_info = fread(cal_sky_info_file(input_args)) ## [fix] per-run file (see run_tag)
   
-  unique_visits = unique(orig_cal_sky_info$VISIT_ID)
+  unique_visits = unique(paste0(orig_cal_sky_info$VISIT_ID))
+  orig_cal_sky_info$VISIT_ID = paste0(orig_cal_sky_info$VISIT_ID)
+  temp_tag = run_tag(VID) ## [fix] per-run stack temp files
   
   message("Now running stack!")
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
   
   temp_vid = VID
-  VID_list = grep(paste0("^",temp_vid), unique_visits, value = T)
+  VID_list = unique_visits[vid_match(unique_visits, temp_vid)] ## [fix] grep("^A|B") anchored only A
 
   for(VID in VID_list){
     if(do_NIRISS){
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & grepl("NIS", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[orig_cal_sky_info$VISIT_ID == VID & grepl("NIS", orig_cal_sky_info$DETECTOR),]
     }else if(do_MIRI){
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & grepl("MIRIMAGE", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[orig_cal_sky_info$VISIT_ID == VID & grepl("MIRIMAGE", orig_cal_sky_info$DETECTOR),]
     }else{
-      cal_sky_info = orig_cal_sky_info[grepl(VID, orig_cal_sky_info$VISIT_ID) & !grepl("NIS|MIRIMAGE", orig_cal_sky_info$DETECTOR),]
+      cal_sky_info = orig_cal_sky_info[orig_cal_sky_info$VISIT_ID == VID & !grepl("NIS|MIRIMAGE", orig_cal_sky_info$DETECTOR),]
     }
     cal_sky_info$MAGZERO_FIX[is.na(cal_sky_info$MAGZERO_FIX)] = cal_sky_info$MAGZERO[is.na(cal_sky_info$MAGZERO_FIX)]
     
@@ -1259,7 +1334,7 @@ do_gen_stack = function(input_args){
     stack_grid = data.frame(stack_grid)
     cal_sky_info = data.frame(cal_sky_info)
     
-    list_residual_temp_files = list.files(invar_dir, pattern = "temp_list_.+", full.names = T)
+    list_residual_temp_files = list.files(invar_dir, pattern = paste0("temp_list_", temp_tag, "_.+"), full.names = T) ## [fix] only this run's
     if(length(list_residual_temp_files)>0){
       unlink(list_residual_temp_files, recursive = T)
     }
@@ -1344,6 +1419,7 @@ do_gen_stack = function(input_args){
             temp_image = Rfits_read_image(input_info[k,'full'], ext=2)
             
             temp_mask = Rfits_read_image(input_info[k,'full'], ext=4, header=FALSE)
+            temp_mask = array(as.numeric(temp_mask), dim = dim(temp_mask)) ## [fix] jwst >= 3 integer64 DQ
             
             temp_image = propaneBadPix(
               image = temp_image,
@@ -1395,7 +1471,7 @@ do_gen_stack = function(input_args){
             inVar_list = c(inVar_list, Rfits::Rfits_read_key(sky_file, 'SKYRMS')^-2)
           }
           
-          temp_file = paste0(invar_dir, '/temp_list_',i,'.fits')
+          temp_file = paste0(invar_dir, '/temp_list_', temp_tag, '_', i,'.fits') ## [fix] per-run name
           Rfits_write(image_list, temp_file)
           rm(image_list)
           image_list_point = Rfits_read(temp_file, pointer=TRUE)
@@ -1521,11 +1597,19 @@ do_wisp_rem = function(input_args){
   skip_completed_files = additional_params$skip_completed_files
   parallel_type = additional_params$parallel_type
   
-  if(is.null(SIGMA_LO)){
-    message("No smoothing on wisp removal")
-  }else{
-    message(paste0("Using smoothing kernel SIGMA_LO = ", SIGMA_LO))
-  }
+  ## [change] wispFixer settings come from wisp_params in initialise_variables.R.
+  ## Defaults: source_threshold 0.95, scale_threshold 0.95, sky_threshold 0.5,
+  ## clip_threshold 0.9999, sigma_hi 2, sigma_lo 2.
+  wisp_args = formals(wispFixer)[c("source_threshold", "scale_threshold", "sky_threshold", "clip_threshold", "sigma_hi", "sigma_lo")]
+  wisp_args = lapply(wisp_args, eval)
+  if(!is.null(SIGMA_LO)) wisp_args["sigma_lo"] = list(SIGMA_LO) ## legacy input_args$SIGMA_LO
+  wisp_params = additional_params$wisp_params
+  unknown = setdiff(names(wisp_params), names(wisp_args))
+  if(length(unknown) > 0) stop("Unknown wisp_params: ", paste(unknown, collapse = ", "))
+  for(nm in names(wisp_params)) wisp_args[nm] = list(wisp_params[[nm]]) ## keeps an explicit NULL
+  SIGMA_LO = wisp_args$sigma_lo
+  
+  message("wispFixer settings: ", paste(names(wisp_args), sapply(wisp_args, function(x) if(is.null(x)) "NULL" else format(x)), sep = "=", collapse = ", "))
   
   filelist = load_files(input_args, which_module = "wisp_rem")
   
@@ -1547,9 +1631,20 @@ do_wisp_rem = function(input_args){
   cat('Processing',dim(info_wisp)[1],'files\n')
   message("Skip completed files is ", ifelse(skip_completed_files, "ON", "OFF"))
   
-  idx_wisp_skip = !(unname(sapply( info_wisp$full, function(x){any(na.omit(Rfits_extnames(x)) == "SCI_ORIG")} )) & skip_completed_files)
+  ## [fix] a selection without wisp detectors crashed on sapply(character(0)) and 1:0 loops
+  if(nrow(info_wisp) == 0){
+    message("No short wavelength wisp detectors to process")
+    return(invisible(NULL))
+  }
   
-  ref_im_list = {}
+  ## [fix] SCI_ORIG is written before the fit, so on its own it does not mean the fit finished
+  wisp_done = vapply(info_wisp$full, function(x){
+    all(c("SCI_ORIG", "REF_WISP_WARP", "WISP_TEMPLATE") %in% na.omit(Rfits_extnames(x)))
+  }, logical(1))
+  idx_wisp_skip = !(unname(wisp_done) & skip_completed_files)
+  
+  ## [fix] one slot per exposure; c() dropped NULL references and skipped files, misaligning the list
+  ref_im_list = vector("list", nrow(info_wisp))
   for(ii in 1:dim(mod_visit_grid)[1]){
     if(idx_wisp_skip[ii]){
       ## Look for long channel in the same VID
@@ -1588,29 +1683,38 @@ do_wisp_rem = function(input_args){
         ref_file_long = ref_files[ which(grepl(long_num, ref_files))[1] ] #Get the longest filter
         load_ref = list(Rfits_point(ref_file_long))
       }
-      ref_im_list = c(ref_im_list, load_ref) ## Allow loop in wisp rem to read long wavelength reference
+      if(!is.null(load_ref)) ref_im_list[[ii]] = load_ref[[1]] ## Allow loop in wisp rem to read long wavelength reference
     }
   }
   
   if(is.null(parallel_type)){
     registerDoParallel(cores = cores)
+    on.exit({stopImplicitCluster(); registerDoSEQ()}, add = TRUE) ## [fix] also clean up after an error
   }else{
     cl <- makeCluster(spec = cores, type = parallel_type, outfile = "")
     registerDoParallel(cl)
+    on.exit({stopCluster(cl); registerDoSEQ()}, add = TRUE) ## [fix] also clean up after an error
   }
   
-  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"))%dopar%{
+  ## [fix] PSOCK workers are fresh R sessions and did not have wispFixer, so every frame failed
+  ## and .errorhandling = "pass" hid it. Export it, and report failures after the loop.
+  temp = foreach(ii = 1:dim(info_wisp)[1], .errorhandling = "pass", .export = "wispFixer", .packages = c("Rwcs", "Rfits", "ProPane", "ProFound"))%dopar%{
     if(idx_wisp_skip[ii]){
       ## copy original data to directory where we keep the wisps
       vid = paste0(info_wisp$VISIT_ID[ii])
-      modl = paste0("NRC", info_wisp$MODULE[ii])
+      modl = paste0(info_wisp$MODULE[ii]) ## [fix] was "NRCA"/"NRCB", which never equals the 'A'/'B' in ID_large/ID_vlarge
       
       ref_im = ref_im_list[[ii]] ## read in long wavelength reference 
       if(is.null(ref_im)){
         message("No long wavelength - skipping...")
         return(NULL)
       }else{
+        ## [fix] on a rerun start from the saved original, never from an already corrected SCI
+        orig_ext = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
         wisp_frame = Rfits_read_image(info_wisp$full[ii], ext = 2)
+        if(!is.na(orig_ext)){
+          wisp_frame$imDat = Rfits_read_image(info_wisp$full[ii], ext = orig_ext, header = FALSE)
+        }
         
         check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
         extloc = Rfits_extname_to_ext(info_wisp$full[ii], 'SCI_ORIG')
@@ -1628,7 +1732,8 @@ do_wisp_rem = function(input_args){
         }
         poly = NULL    
         
-        wisp_fix = wispFixer(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo)
+        wisp_fix = do.call(wispFixer, c(list(wisp_im = wisp_frame, ref_im = ref_im, poly = poly, sigma_lo = sigma_lo),
+                                        wisp_args[setdiff(names(wisp_args), "sigma_lo")]))
         Rfits_write_pix(data = wisp_fix$wisp_fix$imDat, filename = info_wisp$full[ii], ext = 2)
         
         check_Nhdu = Rfits_nhdu(info_wisp$full[ii])
@@ -1655,13 +1760,14 @@ do_wisp_rem = function(input_args){
     }
   }
   
-  if(!is.null(parallel_type)){
-    stopCluster(cl)
-    registerDoSEQ()
-  }else{
-    stopImplicitCluster()
-    registerDoSEQ()
+  ## [fix] report failed frames instead of silently continuing
+  failed = which(sapply(temp, function(x) inherits(x, "error")))
+  if(length(failed) > 0){
+    warning("Wisp removal FAILED for ", length(failed), " frame(s); they keep their uncorrected SCI:\n",
+            paste0("  ", info_wisp$full[failed], ": ", sapply(temp[failed], conditionMessage), collapse = "\n"),
+            call. = FALSE, immediate. = TRUE)
   }
+  ## Cluster cleanup is registered with on.exit above
   gc()
 }
 do_patch = function(input_args){
@@ -1805,9 +1911,10 @@ do_RGB = function(input_args){
   hicut = 0.9999
   
   # cal_sky_info = fread(paste0(ref_dir, "/Pro1oF/cal_sky_info.csv"))
-  cal_sky_info = fread(paste0(cal_sky_info_save_dir, "/cal_sky_info.csv"))
+  cal_sky_info = fread(cal_sky_info_file(input_args)) ## [fix] per-run file (see run_tag)
   vid_temp = VID
-  unique_visits = grep(vid_temp, unique(cal_sky_info$VISIT_ID), value = T)
+  unique_visits = unique(paste0(cal_sky_info$VISIT_ID))
+  unique_visits = unique_visits[vid_match(unique_visits, vid_temp)] ## [fix] VID 'A|B'
   
   for(VID in unique_visits){
     
@@ -1998,9 +2105,9 @@ wispFixer = function(wisp_im, ref_im,
                      source_threshold=0.95, #Threshold on reference image for definitely real sources
                      scale_threshold=0.95, #When considering the +ve ratio map pixels, quantile to define very blue things
                      sky_threshold=0.5, #Safe threshold to find the correct sky level
-                     clip_threshold=0.997, #We avoid very bright pixels in the wisp template
+                     clip_threshold=0.9999, #We avoid very bright pixels in the wisp template ## [change] was 0.997
                      sigma_hi=2,
-                     sigma_lo=20,
+                     sigma_lo=2, ## [change] was 20 (and run_all_process.R passed NULL)
                      poly=NULL,
                      cores=1){
   
@@ -2017,7 +2124,7 @@ wispFixer = function(wisp_im, ref_im,
     delta_max = c(2, 0.1), quan_cut = c(0.995, 0.9999),
     shift_int = F, quick = T, verbose = F, cores = 1 
   )$image_post_fix
-  
+  ref_im_warp$imDat[is.infinite(ref_im_warp$imDat)] = NA ## [fix] the ref_im line above uses $imdat (not $imDat) on a file pointer, so it removed nothing
   
   #Step X (not in paper, but put here for sky sub reasons)
   real_source = quantile(ref_im_warp$imDat, source_threshold, na.rm=TRUE)
@@ -2041,8 +2148,17 @@ wispFixer = function(wisp_im, ref_im,
   wisp_template = wisp_im$imDat - ref_im_warp$imDat*scale
   
   #Step 4
-  wisp_template[wisp_template > quantile(wisp_template[wisp_template > 0], clip_threshold, na.rm=T)] = NA
-  wisp_template[wisp_template < quantile(wisp_template[wisp_template < 0], 1 - clip_threshold, na.rm=T)] = NA
+  ## clip_threshold = 1 means no clipping; a tail with no pixels is skipped
+  if(clip_threshold < 1){
+    pos = which(wisp_template > 0)
+    neg = which(wisp_template < 0)
+    if(length(pos) > 0){
+      wisp_template[which(wisp_template > quantile(wisp_template[pos], clip_threshold, na.rm=T))] = NA
+    }
+    if(length(neg) > 0){
+      wisp_template[which(wisp_template < quantile(wisp_template[neg], 1 - clip_threshold, na.rm=T))] = NA
+    }
+  }
   
   #Step 5
   wisp_template = profoundImBlur(wisp_template, sigma=sigma_hi)
@@ -2058,6 +2174,7 @@ wispFixer = function(wisp_im, ref_im,
     #Step 8
     sel = which(is.na(wisp_template) | wisp_template_lo > wisp_template)
     wisp_template[sel] = wisp_template_lo[sel]
+    wisp_template[is.na(wisp_template)] = 0 ## [fix] where the low-pass is also NA, an NA template blanked the science pixel
   }else{
     wisp_template[is.na(wisp_template)] = 0
   }
@@ -2207,31 +2324,40 @@ do_help = function(input_args){
 }
 
 ## Helper functions to set up JP directories
+## [fix] Create the JumProPe directory tree without asking. Used when JUMPROPE_REF_DIR is set,
+## so batch runs never wait on stdin.
+create_directory_structure = function(ref_dir){
+  for(d in c("/Pro1oF/cal/", "/Pro1oF/cal_sky/", "/Pro1oF/cal_sky_renorm/",
+             "/sky_pro/sky_frames/", "/sky_pro/sky_super/", "/dump/",
+             "/InVar_Stacks/", "/Median_Stacks/", "/Patch_Stacks/")){
+    dir.create(paste0(ref_dir, d), recursive = T, showWarnings = F)
+  }
+  return(ref_dir)
+}
+read_answer = function(){
+  answer = readLines("stdin", n = 1)
+  if(length(answer) == 0){ ## [fix] no terminal (nohup, cron, batch): stop instead of failing obscurely
+    stop("No interactive input available. Set JUMPROPE_REF_DIR (see initialise_env.sh).")
+  }
+  return(answer)
+}
 make_directory_structure = function(){
   message("Should I make the directory structure for you? (T/F): ")
-  make_dirs = readLines("stdin", n = 1)
+  make_dirs = read_answer()
   if(make_dirs == "T"){
     message("Where should I make the directory (supply directory or nothing): ")
-    ref_dir = readLines("stdin", n=1)
+    ref_dir = read_answer()
     if(ref_dir==""){
       ref_dir = getwd()
       message("No user input. Making in current working directory.")
     }
     print(ref_dir)
-    dir.create(paste0(ref_dir, "/Pro1oF/cal/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/Pro1oF/cal_sky/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/Pro1oF/cal_sky_renorm/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/sky_pro/sky_frames/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/sky_pro/sky_super/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/dump/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/InVar_Stacks/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/Median_Stacks/"), recursive = T, showWarnings = F)
-    dir.create(paste0(ref_dir, "/Patch_Stacks/"), recursive = T, showWarnings = F)
+    create_directory_structure(ref_dir)
     return(ref_dir)
   }else if(make_dirs == "F"){
     message("Continuing...")
     message("Where is the reference directory (supply directory or nothing): ")
-    ref_dir = readLines("stdin", n=1)
+    ref_dir = read_answer()
     if(ref_dir==""){
       ref_dir = getwd()
       message("No user input. Assuming everything in current working directory.")
