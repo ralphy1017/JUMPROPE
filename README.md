@@ -1,21 +1,24 @@
-# JumProPe for the NEP TDF reduction
+# JWST UWA MULTIWAVELENGTH PROTOOLS PROCESSING ENDEAVOUR (J U M PRO P E)
 
-This version adds **source-protected, continuous wisp subtraction** to the existing JumProPe wisp stage. It was checked on all 28 program 12529 F200W exposures on NRCA3, NRCA4, NRCB3 and NRCB4. The underlying suite and workflow are described in the [upstream manual](https://www.overleaf.com/read/ksqfmgvhtnhh#3a3d4d).
+Characterised by its ease of use, its speed and its health benefits: JUMPROPE is an all purpose JWST processing suite of codes!
 
-The selected 12529 recipe is `method="continuous_dynamic"`, `sigma_hi=2`, `sigma_lo=2`, `clip_threshold=0.99999`. It combines a source-masked independent wisp prediction with signed residual templates learned from the **other exposures on the same detector**. A common protected sky/1f baseline and continuous model interpolation replace the circular mask-fill switch and positive-only residual floor. Science source pixels are not inpainted or added to DQ masks.
+The manual is a living document and can be found on overleaf here: https://www.overleaf.com/read/ksqfmgvhtnhh#3a3d4d
 
-**Setup, reference preparation and parameters:** [PROCESS/WISP_NMF.md](PROCESS/WISP_NMF.md). The repository includes a pinned JADES template downloader, portable preparation/verification CLI, R/Python integration, source-mask propagation into later sky/1f estimation, and regression tests. The NMF solver is vendored with its MIT license and upstream revision.
+<img src="https://github.com/JordanDSilva/JUMPROPE/blob/main/logo.png" width="500" height="500"/>
 
-**Validation and limits:** [docs/wisp-validation-12529.md](docs/wisp-validation-12529.md). The measured circular background pedestal is removed in the checked regions. Some narrow A3 residuals remain; full-mosaic photometry and arbitrary diffuse-light preservation are not established, and residual-template uncertainty is not fully propagated into ERR. The repository does not include the NEP science data or its large prepared reference assets.
 
-The continuous method is **explicitly selected** through `JUMPROPE_WISP_PARAMS` or `additional_params$wisp_params`; it requires prepared references and does not silently become the default for unprepared datasets. Legacy `wispFixer` defaults remain compatible with the earlier `stable-2026-10-29` tag. That historical no-clipping profile was superseded for this dataset after full-frame/source inspection; it should not be interpreted as the current recommended 12529 configuration. The old tag is retained unchanged.
+## This version
 
-Run from the repository root:
+This is Jordan's JumProPe with bug fixes, so it runs on current jwst pipeline outputs, on NIRCam, NIRISS and MIRI, and on long lists of visits. Wisp removal uses Jordan's `wispFixer` with `clip_threshold = 0.9999`, `sigma_hi = 2` and `sigma_lo = 2`. Every change is listed in [CHANGES.md](CHANGES.md).
+
+It runs the same way as the original:
 
 ```sh
-Rscript tests/test_wisp_defaults.R
-Rscript tests/test_wisp_source_mask.R
-python tests/test_wisp_continuous.py
+source initialise_env.sh            # set paths and cores first
+cd PROCESS                          # edit initialise_variables.R: 1/f mode, wisp/claw removal, stacks
+Rscript run_all_process.R '1345001001|1345002001'
 ```
 
-Use the established JWST/R environment, with NumPy, SciPy and Astropy for the new helpers. Set `JUMPROPE_PYTHON` to that interpreter. The parent reduction supplies orchestration, calibration references and grids; this clone does not install the patched ProPane 1.12.1.2 needed for the parent project's large-grid stacking. [PATCHES.md](PATCHES.md) records implementation changes. Existing calibrated science and mosaics are not reprocessed by installing this code.
+Outputs go to `$JUMPROPE_REF_DIR/Pro1oF/cal` and `$JUMPROPE_REF_DIR/Pro1oF/cal_sky_renorm`. ProPane stacks, patches and RGBs are also made unless `make_stacks = FALSE`.
+
+Dependencies are the same as upstream: R with Rfits, Rwcs, ProFound, ProPane, magicaxis, celestial, imager, Highlander, foreach, doParallel, data.table, dplyr, stringr, checkmate, matrixStats, RANN and Cairo. Calibration needs the jwst Python pipeline.

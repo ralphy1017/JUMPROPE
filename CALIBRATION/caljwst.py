@@ -22,8 +22,6 @@ parser.add_argument('--RAD', type=float, nargs="?", help="Search radius (deg)", 
 parser.add_argument('--VISITID', type=str, help="VISIT ID (e.g., 2736 for SMACS)", default = None)
 parser.add_argument("--redo",type=bool,help="Should we redo the calibration even if files exist?",default=False)
 parser.add_argument("--max_cores", help="How many cores. Must be written as e.g., 'half', 'quarter' or 'all'", default="half")
-parser.add_argument("--match", type=str, help="[nep-miri] only calibrate uncal files whose name contains this (e.g. _mirimage_, _nrc)", default="")
-parser.add_argument("--nproc", type=int, help="[nep-miri] uncal files calibrated in parallel, each with --max_cores", default=1)
 args = parser.parse_args()
 
 def run1(input_data, rate_dir, cal_dir, files_bad_dir):
@@ -41,13 +39,15 @@ def run1(input_data, rate_dir, cal_dir, files_bad_dir):
     os.makedirs(cal_dir, exist_ok=True)
 
     files = input_data
-    ## [nep-miri] .call() instead of instantiating and .run(): only .call() applies the CRDS parameter references
-    ## (pars-*), i.e. the instrument- and filter-specific defaults of the context: MIRI shower flagging at
-    ## F560W-F1500W and refpix skipped; NIRCam snowball expansion (expand_large_events) etc. Only the cores and the
-    ## (unneeded) Image2 resample are overridden.
+
+    ## EDIT THE CODE WITH THE JWST CALIBRATION OPTIONS HERE (add step options to the "steps" dictionaries)
+    ## [fix] Pipeline.call() instead of Pipeline().run(): only call() applies the CRDS parameter reference
+    ## files (pars-*), i.e. the instrument/filter-specific step defaults of the CRDS context (e.g. NIRCam
+    ## snowball flagging, MIRI shower flagging). The options set below are the same as before.
+    ## e.g. Detector1 steps: "emicorr": {"skip": False} for the MIRI EMI banding correction
     try:
         run_output = calwebb_detector1.Detector1Pipeline.call(
-            files, output_dir=rate_dir, save_results=True,
+            files, output_dir=rate_dir,
             steps={"jump": {"maximum_cores": args.max_cores}, "ramp_fit": {"maximum_cores": args.max_cores}})
         calwebb_image2.Image2Pipeline.call(
             run_output, output_dir=cal_dir, save_results=True,
@@ -85,7 +85,6 @@ def cal(ref_dir, ra, dec, rad, visitid):
     os.makedirs(files_bad_dir, exist_ok=True) ## in case uncal files are corrupted
 
     files = glob.glob(uncal_dir + "/**/*fits", recursive = True)
-    files = [f for f in files if args.match in os.path.basename(f)]  ## [nep-miri] --match
     uncal_files = [foo.split("_uncal")[0].split("/")[-1] for foo in files]
 
     rate_dir = []
@@ -111,7 +110,7 @@ def cal(ref_dir, ra, dec, rad, visitid):
         uncal_dir + "*info.csv"
     )
     print(uncal_dir)
-    ## [nep-miri] VISITID downloads write <pid>_UNCAL.csv, not *info.csv: only compare when a cone-search table exists
+    ## [fix] --VISITID downloads write <pid>_UNCAL.csv, not *info.csv; pd.concat([]) raised an error
     df = pd.concat((pd.read_csv(f) for f in info_tables), ignore_index=True) if info_tables else pd.DataFrame()
 
     if (len(df) > len(files)):
@@ -138,14 +137,8 @@ def cal(ref_dir, ra, dec, rad, visitid):
     print("Running " + str(len(files_redo)) + " files")
 
     if len(files_redo) > 0:
-        if args.nproc > 1:  ## [nep-miri] calibrate several files at once (spawned workers re-import jwst)
-            import multiprocessing as mp
-            from concurrent.futures import ProcessPoolExecutor
-            with ProcessPoolExecutor(args.nproc, mp_context=mp.get_context('spawn')) as pool:
-                list(pool.map(run1, files_redo, rate_dir_redo, cal_dir_redo, [files_bad_dir] * len(files_redo)))
-        else:
-            for i, ff in enumerate(files_redo):
-                run1(ff, rate_dir_redo[i], cal_dir_redo[i], files_bad_dir)
+        for i, ff in enumerate(files_redo):
+            run1(ff, rate_dir_redo[i], cal_dir_redo[i], files_bad_dir)
     else:
         exit()
 

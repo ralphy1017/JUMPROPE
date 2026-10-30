@@ -11,8 +11,7 @@ initialise_params = function(){
     ## Keep trend data determines the aggressiveness of the 1/f. If nothing in this data frame, then default 1/f proceeds. 
     ## Default should be good for most blank fields.
     
-    ## [nep-miri] env-driven so one config file can drive any programme.
-    skip_completed_files = toupper(Sys.getenv("JUMPROPE_SKIP_COMPLETED_FILES", "FALSE")) %in% c("T","TRUE","1","YES"),
+    skip_completed_files = FALSE, ## Only process files (in any step) that do not exist in the specified directory
     
     ## vlarge for big objects that fill frame e.g., VV191. Least aggressive 1/f.
     ID_vlarge = data.frame(
@@ -42,36 +41,31 @@ initialise_params = function(){
    ## Claws removal mode
    ## I.e., perform "wisp removal" algorithm on all NIRCam short wavelength detectors
    ## and not only wisp affected [A3,A4,B3,B4]
-   do_claws = FALSE, 
-   
+   do_claws = FALSE,
+
+   ## Wisp removal settings, passed to wispFixer (NIRCam A3, A4, B3, B4; all SW detectors with do_claws).
+   ## sigma_lo = NULL turns the low-pass fill off. Visits listed in ID_large/ID_vlarge always use sigma_lo = NULL.
+   wisp_params = list(
+     source_threshold = 0.95, ## quantile of the LW reference above which pixels are real sources
+     scale_threshold = 0.95, ## quantile of the SW/LW flux ratio used to scale out sources
+     sky_threshold = 0.5, ## quantile used for the sky level
+     clip_threshold = 0.9999, ## clip the brightest/faintest template pixels (1 = no clipping)
+     sigma_hi = 2, ## Gaussian smoothing of the wisp template (pixels)
+     sigma_lo = 2 ## low-pass smoothing used to fill template holes (pixels)
+   ),
+
+   ## ProPane stacks, patched stacks and RGBs. FALSE gives only Pro1oF/cal and Pro1oF/cal_sky_renorm
+   ## (NIRCam long wavelength stacks are still made, because wisp removal uses them as the reference).
+   make_stacks = TRUE,
+
    ## Path to reference astrometric catalogue - to make the ProPane stacks
-   ## [nep-miri] JUMPROPE_TWEAK_CATALOGUE: path to the astrometric reference
-   ## catalogue for the ProPane stacks. Empty/unset keeps the upstream NULL
-   ## (no internal tweak), which is what we want once the exposures have
-   ## already been aligned by jwst tweakreg.
-   tweak_catalogue = local({
-     v = Sys.getenv("JUMPROPE_TWEAK_CATALOGUE", "")
-     if(!nzchar(v) || toupper(v) == "NULL") NULL else v
-   }),
+   tweak_catalogue = NULL, ## NULL will have no internal tweak
 
-   ## [nep-miri] env-driven: JUMPROPE_NAXIS_LONG / JUMPROPE_NAXIS_SHORT.
-   NAXIS_long = local({v = Sys.getenv("JUMPROPE_NAXIS_LONG", ""); if(nzchar(v)) as.integer(v) else NULL}),
-   NAXIS_short = local({v = Sys.getenv("JUMPROPE_NAXIS_SHORT", ""); if(nzchar(v)) as.integer(v) else NULL}),
-
-   ## [nep-miri] JUMPROPE_MODULE_LIST, comma or pipe separated, e.g.
-   ## "MIRIMAGE" or "NRCA_long,NRCB_long". Unset keeps the upstream default.
-   module_list = local({
-     v = Sys.getenv("JUMPROPE_MODULE_LIST", "")
-     if(!nzchar(v)) NULL else trimws(strsplit(v, "[,|]")[[1]])
-   }),
-
-   ## [nep-miri] JUMPROPE_PARALLEL_TYPE, default PSOCK: on Linux, forked
-   ## workers plus a multi-threaded BLAS can deadlock on a mutex, and PSOCK
-   ## workers are fresh processes that avoid it.
-   parallel_type = local({
-     v = Sys.getenv("JUMPROPE_PARALLEL_TYPE", "PSOCK")
-     if(!nzchar(v) || toupper(v) == "NULL") NULL else v
-   })
+   NAXIS_long = NULL, ## Size of the long pixel scales mosaic, keep NULL for default (3000 pixels) 
+   NAXIS_short = NULL, ## Size of the short pixel scales mosaic, keep NULL for default (6000 pixels) 
+   module_list = NULL, ## What modules should we stack, options are ('NRCA_short', 'NRCA_long', 'NRCB_short', 'NRCB_long', 'NIS', 'MIRIMAGE')
+   
+   parallel_type = NULL ## type options for makeCluster in parallel for stacking and wisp removal, type='PSOCK' might be more stable on Linux systems
   )
   ## Finish editing
 

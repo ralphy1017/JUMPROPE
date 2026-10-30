@@ -161,34 +161,20 @@ def vid_query(ref_dir, visit_id, stage, dl_products=False):
     )
 
     visit_ids = np.array([obs[3:13] for obs in products_stage2["obs_id"]])
-    idx = np.flatnonzero(np.char.find(visit_ids,str(visit_id))!=-1)
+    idx = np.flatnonzero(np.char.find(visit_ids,str(visit_id))!=-1)  ## [fix] np.core.defchararray was removed in NumPy 2
 
-    ## [nep-miri] keep imaging frames of the cameras JumProPe processes (NIRCam, MIRI imager, NIRISS imaging), and drop
-    ## the MIRI coronagraphic filters (F1065C etc.) and target-acquisition / other-instrument images
-    keep_inst = {"NIRCAM/IMAGE", "MIRI/IMAGE", "NIRISS/IMAGE"}
-    obs_ok = {str(o["obsid"]) for o in obs_table
-              if str(o["instrument_name"]) in keep_inst and not str(o["filters"]).upper().endswith("C")}
-    idx = np.array([i for i in idx if str(products_stage2["parent_obsid"][i]) in obs_ok
-                    and any(k in products_stage2["productFilename"][i] for k in ("_nrc", "_mirimage_", "_nis_"))], dtype=int)
-    print(f"[nep-miri] {len(idx)} {stage} imaging files for {visit_id}")
-
+    print("Moving the table")
+    Observations.download_products(products_stage2[idx], download_dir=dl_dir, curl_flag=True)
     ascii.write(products_stage2, dl_dir + pid + '_' + stage + '.csv', overwrite=True, format='csv')
     ascii.write(obs_table, dl_dir + pid + '_' + stage + '_obs_table.csv', overwrite=True, format='csv')
 
     if dl_products:
-        ## [nep-miri] parallel download (8 threads) into the usual mastDownload/JWST/<obs_id>/ layout, keeping complete files
-        from concurrent.futures import ThreadPoolExecutor
-        def fetch(i):
-            row = products_stage2[i]
-            out_dir = os.path.join(dl_dir, "mastDownload", "JWST", str(row["obs_id"]))
-            os.makedirs(out_dir, exist_ok=True)
-            path = os.path.join(out_dir, str(row["productFilename"]))
-            if os.path.isfile(path) and os.path.getsize(path) == int(row["size"]):
-                return "kept"
-            return Observations.download_file(row["dataURI"], local_path=path)[0]
-        with ThreadPoolExecutor(int(os.getenv("JUMPROPE_dl_threads", "8"))) as pool:
-            res = list(pool.map(fetch, idx))
-        print(f"[nep-miri] downloaded {res.count('COMPLETE')}, kept {res.count('kept')}, other {len(res) - res.count('COMPLETE') - res.count('kept')}")
+        Observations.download_products(
+            products_stage2[idx],
+            download_dir=dl_dir,
+            curl_flag=False,
+            cache=True
+        )
 
     else:
         check_dl_size(products_stage2)
@@ -202,7 +188,7 @@ def main(args_dict):
         print("Please set ENV variables. ")
         exit()
 
-    if JUMPROPE_MAST_TOKEN not in (None, "", "9999"):  ## [nep-miri] public data need no login; 9999 is the placeholder
+    if JUMPROPE_MAST_TOKEN not in (None, "", "9999"):  ## [fix] 9999 is the placeholder in initialise_env.sh; public data need no login
         ## Used for proprietary data, not a requirement for JP
         my_session = Observations.login(token=str(JUMPROPE_MAST_TOKEN))
 
