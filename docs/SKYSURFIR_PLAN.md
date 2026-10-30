@@ -5,7 +5,7 @@ Goal: a stable JumProPe that runs the same way Jordan's version does (`source in
 **Required products:** `Pro1oF/cal` and `Pro1oF/cal_sky_renorm`.
 **Optional products:** ProPane stacks and mosaics, and ProFound catalogs.
 
-Status: **plan only**. Nothing below has been implemented yet. Line numbers refer to commit `c7051a6`.
+Status: **plan only**. Nothing below has been implemented yet. Line numbers refer to commit `c7051a6`. For every existing change sorted into bug fixes, default changes, opt-in features and open bugs, see [`PATCHES.md`](../PATCHES.md).
 
 ---
 
@@ -51,7 +51,7 @@ Status: **plan only**. Nothing below has been implemented yet. Line numbers refe
 2. **Wisp removal:**
    - The default method is the dynamic `wispFixer` with the PSOCK and resume fixes. It works for every SW filter, F070W–F212N.
    - The parameter profile is a named preset chosen in `initialise_variables.R`:
-     - `jordan`: 0.5 / 0.997 / σ_hi 2 / σ_lo 20.
+     - `jordan`: 0.5 / 0.997 / σ_hi 2 / σ_lo NULL. `run_all_process.R` passes NULL, so the function default of 20 is never used.
      - `nep_stable`: the current branch default, 0.4 / 1 / 0.5 / NULL.
    - `continuous_dynamic` stays opt-in and needs prepared F200W assets.
    - `do_claws` is unchanged.
@@ -131,7 +131,7 @@ Process the whole database, `K` visits at a time:
 ## 6. Open questions
 
 1. **Super-sky unit:** per visit (default), per program, or the whole list together (today's behaviour)?
-2. **Wisp preset for SKYSURF-IR:** `jordan` or `nep_stable`? `nep_stable` was tuned on 12529 F200W only, and injection tests there recovered about 19% of compact SW-only flux.
+2. **Wisp preset for SKYSURF-IR:** `jordan` (sky 0.5, clip 0.997, σ_hi 2) or `nep_stable` (0.4, 1, 0.5)? `nep_stable` was tuned on 12529 F200W only, and injection tests there recovered about 19% of compact SW-only flux.
 3. **Raw-file editing:** keep upstream's in-place wisp edits to `RAW_DIR` (it keeps `SCI_ORIG`), or write copies?
 4. **Missing files:** the patched ProPane 1.12.1.2 and the "revised ProFound", from the parent project's `vendor/`. Is there any parent-project orchestration (notebook, `JUMPROPE.md`) that should be brought into this repo?
 5. **Database layout:** is `RAW_DIR` flat or nested? Is there local SSD or NVMe space, or should scratch live in `/dev/shm`?
